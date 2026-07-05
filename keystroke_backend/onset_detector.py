@@ -11,35 +11,108 @@ import sys
 
 import librosa
 import numpy as np
+from scipy.signal import butter, filtfilt, find_peaks
 
 
 def detect_onsets(wav_path, hop_length=256, delta=0.07, pre_max=3, post_max=3, backtrack=False):
     """
-    Detects onset (keystroke click) timestamps in an audio file.
+    Detect keystroke click onsets from an audio file.
 
-    Parameters you will likely need to TUNE against your own ground-truth log:
+    The detector is tuned for percussive keyboard clicks rather than generic
+    spectral changes. It first isolates the click band, builds a smoothed
+    energy envelope, and then picks strong local peaks while suppressing
+    duplicated detections from a single event.
+
+    Parameters you may tune against your own ground-truth log:
         delta      - higher = fewer, stronger onsets detected (reduces false positives)
         hop_length - smaller = finer time resolution, more compute
-        pre_max/post_max - local-max window sizes for picking peaks
+        pre_max/post_max - local-neighborhood size used to avoid consecutive peaks
 
     Returns:
         onset_times: numpy array of timestamps (seconds) where a click was detected
     """
     y, sr = librosa.load(wav_path, sr=None)
 
-    onset_env = librosa.onset.onset_strength(y=y, sr=sr, hop_length=hop_length)
+    # Convert stereo audio to mono and normalize so the envelope is not biased by
+    # recording amplitude differences across sessions.
+    if y.ndim > 1:
+        y = np.mean(y, axis=0)
+    y = y.astype(np.float32)
+    peak = np.max(np.abs(y))
+    if peak > 0:
+        y = y / peak
 
-    onset_frames = librosa.onset.onset_detect(
-        onset_envelope=onset_env,
-        sr=sr,
-        hop_length=hop_length,
-        delta=delta,
-        pre_max=pre_max,
-        post_max=post_max,
-        backtrack=backtrack,
+    # Apply a band-pass filter to emphasize the transient click energy and suppress
+    # low-frequency rumble and high-frequency noise.
+    low_cut = 800.0
+    high_cut = 8000.0
+    if sr < 2 * high_cut:
+        high_cut = max(1000.0, sr / 2 - 100.0)
+
+    b, a = butter(
+        3,
+        [low_cut / (sr / 2.0), high_cut / (sr / 2.0)],
+        btype="bandpass",
+    )
+    filtered = filtfilt(b, a, y, method="pad")
+
+    # Build two RMS envelopes: a short window for impulsive clicks and a longer
+    # window for the local noise floor. The sharp attack of a keystroke produces a
+    # rapid rise in the short-window envelope relative to the longer baseline.
+    short_frame = max(64, hop_length // 2)
+    long_frame = max(256, hop_length * 2)
+    short_rms = librosa.feature.rms(y=filtered, frame_length=short_frame, hop_length=hop_length)[0]
+    long_rms = librosa.feature.rms(y=filtered, frame_length=long_frame, hop_length=hop_length)[0]
+
+    short_rms = np.maximum(short_rms, 1e-8)
+    long_rms = np.maximum(long_rms, 1e-8)
+    transient_score = short_rms / long_rms
+
+    # Normalize the score so the thresholding behaves consistently across recordings.
+    transient_score = transient_score / (np.percentile(transient_score, 95) + 1e-8)
+
+    # Smooth the score slightly and then measure its first derivative. A real click
+    # has a sudden rise; broad noise tends to rise and fall more gradually.
+    smoothing_window = 3
+    if len(transient_score) > 1:
+        kernel = np.ones(smoothing_window, dtype=np.float32) / smoothing_window
+        transient_score = np.convolve(transient_score, kernel, mode="same")
+    attack_score = np.diff(transient_score)
+    attack_score = np.clip(attack_score, 0.0, None)
+
+    # Use an adaptive threshold so weak background noise is ignored while strong
+    # clicks still stand out. Higher delta makes the detector more conservative.
+    noise_floor = np.median(attack_score)
+    dynamic_range = np.percentile(attack_score, 90) - noise_floor
+    dynamic_range = max(dynamic_range, np.std(attack_score) + 1e-6)
+    threshold = noise_floor + 0.7 * dynamic_range + 0.12 * max(0.0, delta)
+    threshold = max(threshold, np.percentile(attack_score, 90) * 0.55)
+
+    # Find peaks separated by a minimum spacing of ~70 ms to merge duplicates from
+    # the same keypress while still allowing rapid successive presses.
+    min_gap_seconds = 0.07
+    min_distance = max(1, int(round(min_gap_seconds * sr / hop_length)))
+    min_distance = max(min_distance, pre_max + post_max + 1)
+
+    peak_indices, _ = find_peaks(
+        attack_score,
+        height=threshold,
+        distance=min_distance,
+        prominence=max(0.02, threshold * 0.25),
     )
 
+    onset_frames = np.array(peak_indices + 1, dtype=int)
     onset_times = librosa.frames_to_time(onset_frames, sr=sr, hop_length=hop_length)
+
+    # Merge any remaining peaks that are too close together, which can happen when
+    # a single click produces a small cluster of local maxima.
+    filtered_times = []
+    minimum_gap = 0.07
+    for t in onset_times:
+        if not filtered_times or (t - filtered_times[-1]) > minimum_gap:
+            filtered_times.append(float(t))
+
+    onset_times = np.array(filtered_times, dtype=float)
     return onset_times, y, sr
 
 
