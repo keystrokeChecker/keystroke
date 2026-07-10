@@ -8,7 +8,7 @@ USAGE:
 
 import argparse
 
-from onset_detector import detect_onsets
+from src.predictor import detect_onsets
 
 
 def segment_into_words(onset_times, gap_threshold=0.4):
@@ -54,7 +54,7 @@ if __name__ == "__main__":
     parser.add_argument("wav_path", help="Path to the audio file")
     parser.add_argument("--threshold", type=float, default=0.4,
                          help="Word-boundary gap threshold in seconds (tune this!)")
-    parser.add_argument("--delta", type=float, default=0.07,
+    parser.add_argument("--delta", type=float, default=0.05,
                          help="Onset sensitivity (lower = more sensitive)")
     args = parser.parse_args()
 
@@ -64,3 +64,4 @@ if __name__ == "__main__":
     print(f"Detected {len(onsets)} total keystrokes across {len(counts)} words.")
     print("Per-word counts:", counts)
     print("Formatted output:", format_output(counts))
+
