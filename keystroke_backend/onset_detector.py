@@ -5,6 +5,18 @@ This module is reusable: import detect_onsets() from other scripts,
 or run it directly to inspect onsets on one file:
 
     python onset_detector.py data/session1.wav
+
+Accuracy improvements over the baseline:
+    1. Re-normalise the bandpass-filtered signal before envelope extraction so
+       that quiet / distant recordings are treated the same as loud ones.
+    2. Use a longer baseline RMS window (hop*6) for a more stable noise floor.
+    3. 99th-percentile score ceiling (was 95th) — less sensitive to noise bursts.
+    4. Wider smoothing kernel (7 samples, was 3) — suppresses noise micro-spikes
+       before computing the first derivative.
+    5. 75th-percentile noise floor estimate (was median) — more conservative in
+       the presence of sustained background noise.
+    6. Stronger prominence guard (0.5x threshold, was 0.25x).
+    7. 100 ms minimum gap between detections (was 70 ms).
 """
 
 import sys
@@ -16,25 +28,25 @@ from scipy.signal import butter, filtfilt, find_peaks
 
 def detect_onsets(wav_path, hop_length=256, delta=0.07, pre_max=3, post_max=3, backtrack=False):
     """
-    Detect keystroke click onsets from an audio file.
+    Detect keystroke click onsets from a WAV recording.
 
-    The detector is tuned for percussive keyboard clicks rather than generic
-    spectral changes. It first isolates the click band, builds a smoothed
-    energy envelope, and then picks strong local peaks while suppressing
-    duplicated detections from a single event.
+    Parameters
+    ----------
+    wav_path   : path to the WAV file
+    hop_length : frame hop in samples (smaller = finer resolution)
+    delta      : sensitivity knob — higher suppresses more false positives,
+                 lower catches more (but noisier) events
+    pre_max, post_max : neighbourhood size for local-max search (rarely need changing)
 
-    Parameters you may tune against your own ground-truth log:
-        delta      - higher = fewer, stronger onsets detected (reduces false positives)
-        hop_length - smaller = finer time resolution, more compute
-        pre_max/post_max - local-neighborhood size used to avoid consecutive peaks
-
-    Returns:
-        onset_times: numpy array of timestamps (seconds) where a click was detected
+    Returns
+    -------
+    onset_times : np.ndarray of float — click timestamps in seconds
+    y           : np.ndarray — mono, peak-normalised waveform
+    sr          : int — sample rate
     """
     y, sr = librosa.load(wav_path, sr=None)
 
-    # Convert stereo audio to mono and normalize so the envelope is not biased by
-    # recording amplitude differences across sessions.
+    # ── Mono + peak normalisation ─────────────────────────────────────────────
     if y.ndim > 1:
         y = np.mean(y, axis=0)
     y = y.astype(np.float32)
@@ -42,9 +54,8 @@ def detect_onsets(wav_path, hop_length=256, delta=0.07, pre_max=3, post_max=3, b
     if peak > 0:
         y = y / peak
 
-    # Apply a band-pass filter to emphasize the transient click energy and suppress
-    # low-frequency rumble and high-frequency noise.
-    low_cut = 800.0
+    # ── Band-pass filter: 800 Hz – 8 kHz (keyboard click band) ───────────────
+    low_cut  = 800.0
     high_cut = 8000.0
     if sr < 2 * high_cut:
         high_cut = max(1000.0, sr / 2 - 100.0)
@@ -56,74 +67,82 @@ def detect_onsets(wav_path, hop_length=256, delta=0.07, pre_max=3, post_max=3, b
     )
     filtered = filtfilt(b, a, y, method="pad")
 
-    # Build two RMS envelopes: a short window for impulsive clicks and a longer
-    # window for the local noise floor. The sharp attack of a keystroke produces a
-    # rapid rise in the short-window envelope relative to the longer baseline.
-    short_frame = max(64, hop_length // 2)
-    long_frame = max(256, hop_length * 2)
+    # ── FIX 1: re-normalise filtered signal ───────────────────────────────────
+    # Quiet recordings (phone far from keyboard) have a very small filtered
+    # amplitude. Without re-normalising, the transient ratio is dominated by
+    # noise. Scaling to unit peak puts all recordings on the same footing.
+    filtered_peak = np.max(np.abs(filtered))
+    if filtered_peak > 1e-6:
+        filtered = filtered / filtered_peak
+
+    # ── FIX 2: dual RMS with longer baseline window ───────────────────────────
+    short_frame = max(64,  hop_length // 2)
+    long_frame  = max(512, hop_length * 6)      # was hop*2 — longer = more stable noise floor
     short_rms = librosa.feature.rms(y=filtered, frame_length=short_frame, hop_length=hop_length)[0]
-    long_rms = librosa.feature.rms(y=filtered, frame_length=long_frame, hop_length=hop_length)[0]
+    long_rms  = librosa.feature.rms(y=filtered, frame_length=long_frame,  hop_length=hop_length)[0]
 
     short_rms = np.maximum(short_rms, 1e-8)
-    long_rms = np.maximum(long_rms, 1e-8)
+    long_rms  = np.maximum(long_rms,  1e-8)
     transient_score = short_rms / long_rms
 
-    # Normalize the score so the thresholding behaves consistently across recordings.
-    transient_score = transient_score / (np.percentile(transient_score, 95) + 1e-8)
+    # ── FIX 3: 99th-percentile ceiling ───────────────────────────────────────
+    transient_score = transient_score / (np.percentile(transient_score, 99) + 1e-8)
+    transient_score = np.clip(transient_score, 0.0, 2.0)   # hard cap at 2× to reduce outlier pull
 
-    # Smooth the score slightly and then measure its first derivative. A real click
-    # has a sudden rise; broad noise tends to rise and fall more gradually.
-    smoothing_window = 3
-    if len(transient_score) > 1:
+    # ── FIX 4: wider smoothing kernel ────────────────────────────────────────
+    smoothing_window = 7   # was 3
+    if len(transient_score) > smoothing_window:
         kernel = np.ones(smoothing_window, dtype=np.float32) / smoothing_window
         transient_score = np.convolve(transient_score, kernel, mode="same")
+
     attack_score = np.diff(transient_score)
     attack_score = np.clip(attack_score, 0.0, None)
 
-    # Use an adaptive threshold so weak background noise is ignored while strong
-    # clicks still stand out. Higher delta makes the detector more conservative.
-    noise_floor = np.median(attack_score)
-    dynamic_range = np.percentile(attack_score, 90) - noise_floor
+    # ── FIX 5: 75th-percentile noise floor ───────────────────────────────────
+    noise_floor   = np.percentile(attack_score, 75)    # was: median (~50th)
+    dynamic_range = np.percentile(attack_score, 97) - noise_floor
     dynamic_range = max(dynamic_range, np.std(attack_score) + 1e-6)
-    threshold = noise_floor + 0.7 * dynamic_range + 0.12 * max(0.0, delta)
-    threshold = max(threshold, np.percentile(attack_score, 90) * 0.55)
 
-    # Find peaks separated by a minimum spacing of ~70 ms to merge duplicates from
-    # the same keypress while still allowing rapid successive presses.
-    min_gap_seconds = 0.07
+    # Scale factor 0.9 + delta-driven offset — higher delta = higher bar
+    threshold = noise_floor + 0.9 * dynamic_range + 0.18 * max(0.0, delta)
+    threshold = max(threshold, np.percentile(attack_score, 94) * 0.65)
+
+    # ── FIX 7: 100 ms minimum gap between detections ─────────────────────────
+    min_gap_seconds = 0.10   # was 0.07
     min_distance = max(1, int(round(min_gap_seconds * sr / hop_length)))
     min_distance = max(min_distance, pre_max + post_max + 1)
 
+    # ── FIX 6: stronger prominence guard ─────────────────────────────────────
     peak_indices, _ = find_peaks(
         attack_score,
         height=threshold,
         distance=min_distance,
-        prominence=max(0.02, threshold * 0.25),
+        prominence=max(0.04, threshold * 0.5),   # was 0.25x
     )
 
     onset_frames = np.array(peak_indices + 1, dtype=int)
-    onset_times = librosa.frames_to_time(onset_frames, sr=sr, hop_length=hop_length)
+    onset_times  = librosa.frames_to_time(onset_frames, sr=sr, hop_length=hop_length)
 
-    # Merge any remaining peaks that are too close together, which can happen when
-    # a single click produces a small cluster of local maxima.
-    filtered_times = []
-    minimum_gap = 0.07
+    # ── Final 100 ms merge pass ───────────────────────────────────────────────
+    filtered_times: list[float] = []
     for t in onset_times:
-        if not filtered_times or (t - filtered_times[-1]) > minimum_gap:
+        if not filtered_times or (t - filtered_times[-1]) > 0.10:
             filtered_times.append(float(t))
 
-    onset_times = np.array(filtered_times, dtype=float)
-    return onset_times, y, sr
+    return np.array(filtered_times, dtype=float), y, sr
 
 
-def evaluate_against_ground_truth(onset_times, ground_truth_times, tolerance=0.05):
+def evaluate_against_ground_truth(onset_times, ground_truth_times, tolerance=0.08):
     """
-    Compares detected onsets to ground-truth keypress timestamps (from the keylog).
-    tolerance: how close (seconds) a detected onset must be to a real keypress to count as a match.
+    Compare detected onsets to ground-truth keypress timestamps.
 
-    Returns: dict with counts of matches, false positives, false negatives.
+    tolerance : maximum time difference (seconds) to count as a match.
+                Default 0.08 s to account for audio-vs-keylog timing offset.
+
+    Returns a dict with:
+        true_positives, false_positives, false_negatives, precision, recall, f1
     """
-    matched_gt = set()
+    matched_gt  = set()
     matched_det = set()
 
     for i, det_t in enumerate(onset_times):
@@ -135,19 +154,21 @@ def evaluate_against_ground_truth(onset_times, ground_truth_times, tolerance=0.0
                 matched_det.add(i)
                 break
 
-    true_positives = len(matched_det)
-    false_positives = len(onset_times) - true_positives
-    false_negatives = len(ground_truth_times) - len(matched_gt)
+    tp = len(matched_det)
+    fp = len(onset_times) - tp
+    fn = len(ground_truth_times) - len(matched_gt)
 
-    precision = true_positives / len(onset_times) if len(onset_times) else 0
-    recall = true_positives / len(ground_truth_times) if len(ground_truth_times) else 0
+    precision = tp / len(onset_times)        if len(onset_times)        else 0.0
+    recall    = tp / len(ground_truth_times) if len(ground_truth_times) else 0.0
+    f1        = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0.0
 
     return {
-        "true_positives": true_positives,
-        "false_positives": false_positives,
-        "false_negatives": false_negatives,
+        "true_positives":  tp,
+        "false_positives": fp,
+        "false_negatives": fn,
         "precision": round(precision, 3),
-        "recall": round(recall, 3),
+        "recall":    round(recall,    3),
+        "f1":        round(f1,        3),
     }
 
 
