@@ -14,7 +14,38 @@ import numpy as np
 from scipy.signal import butter, filtfilt, find_peaks
 
 
-def detect_onsets(wav_path, hop_length=256, delta=0.07, pre_max=3, post_max=3, backtrack=False):
+def normalize_recording(y):
+    """
+    Peak-normalizes the recording and estimates a per-recording noise floor.
+
+    Returns
+    -------
+    y_norm : np.ndarray — peak-normalized signal
+    noise_floor : float — estimated noise floor (10th percentile RMS)
+    """
+    if y.ndim > 1:
+        y = np.mean(y, axis=0)
+    y = y.astype(np.float32)
+    
+    peak = np.max(np.abs(y))
+    if peak > 0:
+        y = y / peak
+        
+    # Compute 10th percentile of frame RMS values as noise floor
+    frame_length = 1024
+    hop_length = 256
+    if len(y) > frame_length:
+        rms_frames = librosa.feature.rms(y=y, frame_length=frame_length, hop_length=hop_length)[0]
+        noise_floor = float(np.percentile(rms_frames, 10))
+    else:
+        noise_floor = float(np.mean(np.abs(y)))
+        
+    return y, noise_floor
+
+
+def detect_onsets(wav_path, hop_length=256, delta=0.07, pre_max=3, post_max=3,
+                  backtrack=False, min_gap_seconds=0.06, prominence_multiplier=0.5,
+                  smoothing_window=7):
     """
     Detect keystroke click onsets from an audio file.
 
