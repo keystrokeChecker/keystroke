@@ -16,7 +16,8 @@ Accuracy improvements over the baseline:
     5. 75th-percentile noise floor estimate (was median) — more conservative in
        the presence of sustained background noise.
     6. Stronger prominence guard (0.5x threshold, was 0.25x).
-    7. 100 ms minimum gap between detections (was 70 ms).
+    7. Tunable minimum gap between detections (default 60 ms).
+    8. min_gap_seconds and prominence_multiplier are now explicit parameters.
 """
 
 import sys
@@ -26,7 +27,38 @@ import numpy as np
 from scipy.signal import butter, filtfilt, find_peaks
 
 
-def detect_onsets(wav_path, hop_length=256, delta=0.07, pre_max=3, post_max=3, backtrack=False):
+def normalize_recording(y):
+    """
+    Peak-normalizes the recording and estimates a per-recording noise floor.
+
+    Returns
+    -------
+    y_norm : np.ndarray — peak-normalized signal
+    noise_floor : float — estimated noise floor (10th percentile RMS)
+    """
+    if y.ndim > 1:
+        y = np.mean(y, axis=0)
+    y = y.astype(np.float32)
+    
+    peak = np.max(np.abs(y))
+    if peak > 0:
+        y = y / peak
+        
+    # Compute 10th percentile of frame RMS values as noise floor
+    frame_length = 1024
+    hop_length = 256
+    if len(y) > frame_length:
+        rms_frames = librosa.feature.rms(y=y, frame_length=frame_length, hop_length=hop_length)[0]
+        noise_floor = float(np.percentile(rms_frames, 10))
+    else:
+        noise_floor = float(np.mean(np.abs(y)))
+        
+    return y, noise_floor
+
+
+def detect_onsets(wav_path, hop_length=256, delta=0.07, pre_max=3, post_max=3,
+                  backtrack=False, min_gap_seconds=0.06, prominence_multiplier=0.5,
+                  smoothing_window=7):
     """
     Detect keystroke click onsets from a WAV recording.
 
@@ -37,6 +69,14 @@ def detect_onsets(wav_path, hop_length=256, delta=0.07, pre_max=3, post_max=3, b
     delta      : sensitivity knob — higher suppresses more false positives,
                  lower catches more (but noisier) events
     pre_max, post_max : neighbourhood size for local-max search (rarely need changing)
+    min_gap_seconds : minimum time (seconds) between two detected onsets.
+                      Lower values allow resolving fast-typed keystroke bursts;
+                      higher values suppress double-detections of one click.
+                      Default 0.06 s (60 ms).
+    prominence_multiplier : find_peaks prominence = max(0.04, threshold * this).
+                            Lower values accept weaker peaks; higher values
+                            require sharper transients. Default 0.5.
+    smoothing_window : width of the moving average smoothing kernel. Default 7.
 
     Returns
     -------
@@ -46,13 +86,8 @@ def detect_onsets(wav_path, hop_length=256, delta=0.07, pre_max=3, post_max=3, b
     """
     y, sr = librosa.load(wav_path, sr=None)
 
-    # ── Mono + peak normalisation ─────────────────────────────────────────────
-    if y.ndim > 1:
-        y = np.mean(y, axis=0)
-    y = y.astype(np.float32)
-    peak = np.max(np.abs(y))
-    if peak > 0:
-        y = y / peak
+    # ── Preprocessing: Peak normalisation & Noise-floor estimation ───────────
+    y, rec_noise_floor = normalize_recording(y)
 
     # ── Band-pass filter: 800 Hz – 8 kHz (keyboard click band) ───────────────
     low_cut  = 800.0
@@ -90,7 +125,6 @@ def detect_onsets(wav_path, hop_length=256, delta=0.07, pre_max=3, post_max=3, b
     transient_score = np.clip(transient_score, 0.0, 2.0)   # hard cap at 2× to reduce outlier pull
 
     # ── FIX 4: wider smoothing kernel ────────────────────────────────────────
-    smoothing_window = 7   # was 3
     if len(transient_score) > smoothing_window:
         kernel = np.ones(smoothing_window, dtype=np.float32) / smoothing_window
         transient_score = np.convolve(transient_score, kernel, mode="same")
@@ -107,8 +141,7 @@ def detect_onsets(wav_path, hop_length=256, delta=0.07, pre_max=3, post_max=3, b
     threshold = noise_floor + 0.9 * dynamic_range + 0.18 * max(0.0, delta)
     threshold = max(threshold, np.percentile(attack_score, 94) * 0.65)
 
-    # ── FIX 7: 100 ms minimum gap between detections ─────────────────────────
-    min_gap_seconds = 0.10   # was 0.07
+    # ── FIX 7: tunable minimum gap between detections ─────────────────────────
     min_distance = max(1, int(round(min_gap_seconds * sr / hop_length)))
     min_distance = max(min_distance, pre_max + post_max + 1)
 
@@ -117,16 +150,16 @@ def detect_onsets(wav_path, hop_length=256, delta=0.07, pre_max=3, post_max=3, b
         attack_score,
         height=threshold,
         distance=min_distance,
-        prominence=max(0.04, threshold * 0.5),   # was 0.25x
+        prominence=max(0.04, threshold * prominence_multiplier),
     )
 
     onset_frames = np.array(peak_indices + 1, dtype=int)
     onset_times  = librosa.frames_to_time(onset_frames, sr=sr, hop_length=hop_length)
 
-    # ── Final 100 ms merge pass ───────────────────────────────────────────────
+    # ── Final merge pass (uses same min_gap_seconds) ──────────────────────────
     filtered_times: list[float] = []
     for t in onset_times:
-        if not filtered_times or (t - filtered_times[-1]) > 0.10:
+        if not filtered_times or (t - filtered_times[-1]) > min_gap_seconds:
             filtered_times.append(float(t))
 
     return np.array(filtered_times, dtype=float), y, sr

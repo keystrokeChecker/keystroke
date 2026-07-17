@@ -15,6 +15,12 @@ USAGE:
     # Auto-calibrate across multiple sessions simultaneously
     python tune_and_evaluate.py --names session1 session2 session3 --auto
 
+    # Evaluate with YAMNet false-positive filter (requires trained classifier)
+    python tune_and_evaluate.py --names session1 session2 session3 --yamnet-filter
+
+    # Combine auto-calibration with YAMNet filter
+    python tune_and_evaluate.py --names session1 session2 session3 --auto --yamnet-filter
+
 Accuracy improvements over the baseline:
     - --auto flag sweeps a grid of (delta, threshold) combinations and picks
       the pair with the best F1 score against ground-truth keystroke times,
@@ -23,6 +29,8 @@ Accuracy improvements over the baseline:
       in addition to the word-level accuracy, giving a clearer picture.
     - Keystroke-level evaluation uses evaluate_against_ground_truth() with
       a 80 ms tolerance window.
+    - --yamnet-filter flag runs raw onset candidates through a trained YAMNet
+      embedding classifier to remove false positives before segmentation.
 """
 
 import argparse
@@ -35,6 +43,7 @@ from onset_detector import detect_onsets, evaluate_against_ground_truth
 from segmenter import segment_into_words, auto_threshold, format_output
 
 DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
+DEFAULT_YAMNET_MODEL = os.path.join(os.path.dirname(__file__), "models", "keystroke_classifier.joblib")
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Helpers
@@ -130,7 +139,7 @@ def auto_calibrate(wav_paths, gt_times_list):
                 best_delta     = delta
                 best_threshold = threshold
 
-    print(f"\n  Best → delta={best_delta}  threshold={best_threshold}  F1={best_f1:.3f}")
+    print(f"\n  Best -> delta={best_delta}  threshold={best_threshold}  F1={best_f1:.3f}")
     return best_delta, best_threshold, best_f1
 
 
@@ -138,14 +147,29 @@ def auto_calibrate(wav_paths, gt_times_list):
 # Per-session reporting
 # ──────────────────────────────────────────────────────────────────────────────
 
-def report_session(name, delta, threshold, use_auto_seg=False):
+def report_session(name, delta, threshold, use_auto_seg=False,
+                   yamnet_filter=False, yamnet_model_path=None,
+                   yamnet_confidence=0.5):
     wav_path = os.path.join(DATA_DIR, f"{name}.wav")
     log_path = os.path.join(DATA_DIR, f"{name}_log.csv")
 
     true_counts, gt_times = load_ground_truth(log_path)
     onsets, y, sr = detect_onsets(wav_path, delta=delta)
+    raw_count = len(onsets)
 
-    # Choose threshold
+    # ── Optional YAMNet false-positive filter ─────────────────────────────
+    if yamnet_filter:
+        from yamnet_filter import filter_onsets_with_yamnet
+        classifier_path = yamnet_model_path or DEFAULT_YAMNET_MODEL
+        print(f"  Filtering {raw_count} raw onsets with YAMNet classifier "
+              f"(threshold={yamnet_confidence:.2f}) ...")
+        onsets = filter_onsets_with_yamnet(
+            onsets, wav_path, classifier_path,
+            confidence_threshold=yamnet_confidence,
+        )
+        print(f"  -> {len(onsets)} onsets kept ({raw_count - len(onsets)} removed)")
+
+    # Choose segmentation threshold
     if use_auto_seg:
         seg_threshold = auto_threshold(onsets)
     else:
@@ -158,12 +182,16 @@ def report_session(name, delta, threshold, use_auto_seg=False):
     ev = evaluate_against_ground_truth(onsets, gt_times, tolerance=0.08)
 
     sep = "=" * 56
+    filter_tag = " + YAMNet" if yamnet_filter else ""
     print(f"\n{sep}")
-    print(f"  Session : {name}")
+    print(f"  Session : {name}{filter_tag}")
     print(f"  Params  : delta={delta}  threshold={seg_threshold:.3f}")
+    if yamnet_filter:
+        print(f"  YAMNet  : confidence≥{yamnet_confidence:.2f}  "
+              f"kept {len(onsets)}/{raw_count} onsets")
     print(sep)
-    print(f"  True counts      : {true_counts}  →  {format_output(true_counts)}")
-    print(f"  Predicted counts : {pred_counts}  →  {format_output(pred_counts)}")
+    print(f"  True counts      : {true_counts}  ->  {format_output(true_counts)}")
+    print(f"  Predicted counts : {pred_counts}  ->  {format_output(pred_counts)}")
     print(f"  Word accuracy    : {correct}/{total} = {acc:.1%}")
     print(f"  Keystroke detection:")
     print(f"    Total detected : {len(onsets)}  (ground truth: {len(gt_times)})")
@@ -176,18 +204,20 @@ def report_session(name, delta, threshold, use_auto_seg=False):
     print(sep)
 
     if acc < 0.85:
-        print("  ⚠ Word accuracy below 85%.  Suggestions:")
+        print("  [!] Word accuracy below 85%.  Suggestions:")
         if len(pred_counts) > len(true_counts):
-            print("    → Too many words detected: increase --threshold")
+            print("    -> Too many words detected: increase --threshold")
         elif len(pred_counts) < len(true_counts):
-            print("    → Too few words detected: decrease --threshold")
+            print("    -> Too few words detected: decrease --threshold")
         if ev["false_positives"] > ev["true_positives"]:
-            print("    → Many false keystroke detections: increase --delta")
+            print("    -> Many false keystroke detections: increase --delta")
             print("      or try --auto to let the script find better parameters")
+            if not yamnet_filter:
+                print("      or try --yamnet-filter to apply the YAMNet classifier")
         if ev["false_negatives"] > 2:
-            print("    → Missing real keystrokes: decrease --delta")
+            print("    -> Missing real keystrokes: decrease --delta")
     else:
-        print("  ✅ Word accuracy at or above 85% target!")
+        print("  [OK] Word accuracy at or above 85% target!")
 
     return acc, ev["f1"]
 
@@ -212,6 +242,12 @@ def main():
                         help="Auto-calibrate delta and threshold for best F1 score")
     parser.add_argument("--auto-seg", action="store_true",
                         help="Use auto_threshold() for word segmentation (no manual threshold needed)")
+    parser.add_argument("--yamnet-filter", action="store_true",
+                        help="Filter onsets through a trained YAMNet classifier to remove false positives")
+    parser.add_argument("--yamnet-model", type=str, default=None,
+                        help=f"Path to the YAMNet classifier model (default: {DEFAULT_YAMNET_MODEL})")
+    parser.add_argument("--yamnet-confidence", type=float, default=0.5,
+                        help="Confidence threshold for the YAMNet filter (default: 0.5)")
     args = parser.parse_args()
 
     # Resolve session list
@@ -237,18 +273,25 @@ def main():
         delta, threshold, _ = auto_calibrate(wav_paths, gt_times_all)
 
     # ── Per-session report ────────────────────────────────────────────────────
+    if args.yamnet_filter:
+        print("\n[YAMNET] YAMNet filter ENABLED")
+
     accs, f1s = [], []
     for name in names:
         acc, f1 = report_session(
-            name, delta, threshold, use_auto_seg=args.auto_seg
+            name, delta, threshold, use_auto_seg=args.auto_seg,
+            yamnet_filter=args.yamnet_filter,
+            yamnet_model_path=args.yamnet_model,
+            yamnet_confidence=args.yamnet_confidence,
         )
         accs.append(acc)
         f1s.append(f1)
 
     # Summary when multiple sessions
     if len(names) > 1:
+        filter_label = " (with YAMNet filter)" if args.yamnet_filter else ""
         print(f"\n{'=' * 56}")
-        print(f"  Overall  —  {len(names)} sessions")
+        print(f"  Overall  —  {len(names)} sessions{filter_label}")
         print(f"  Mean word accuracy    : {np.mean(accs):.1%}")
         print(f"  Mean keystroke F1     : {np.mean(f1s):.3f}")
         print(f"{'=' * 56}")
