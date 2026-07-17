@@ -26,6 +26,7 @@ from onset_detector import detect_onsets, evaluate_against_ground_truth
 from segmenter import segment_into_words, format_output
 
 DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
+DEFAULT_YAMNET_MODEL = os.path.join(os.path.dirname(__file__), "models", "keystroke_classifier.joblib")
 
 # Parameter search grid used by --auto
 DELTA_GRID     = [0.05, 0.07, 0.10, 0.15, 0.20, 0.30, 0.40, 0.50]
@@ -126,8 +127,8 @@ def report_session(name, delta, threshold):
     print(f"  Session  : {name}")
     print(f"  delta={delta}   threshold={threshold}")
     print(sep)
-    print(f"  True counts      : {true_counts}  →  {format_output(true_counts)}")
-    print(f"  Predicted counts : {pred_counts}  →  {format_output(pred_counts)}")
+    print(f"  True counts      : {true_counts}  ->  {format_output(true_counts)}")
+    print(f"  Predicted counts : {pred_counts}  ->  {format_output(pred_counts)}")
     print(f"  Word accuracy    : {correct}/{total} = {acc:.1%}")
     print(f"  Onsets detected  : {len(onsets)}  (ground truth: {len(gt_times)})")
     print(f"  Precision        : {ev['precision']:.3f}")
@@ -147,7 +148,7 @@ def report_session(name, delta, threshold):
             print(f"     → Missed real keystrokes   — try decreasing --delta (currently {delta})")
         print("     → Run with --auto to let the script find the best parameters.")
     else:
-        print("  ✅ Word accuracy at or above 85% target!")
+        print("  [OK] Word accuracy at or above 85% target!")
 
     return acc, ev["f1"], true_counts
 
@@ -184,6 +185,9 @@ def main():
         delta, threshold = auto_calibrate(wav_paths, gt_times_list, true_counts_list)
 
     # ── Per-session report ────────────────────────────────────────────────────
+    if args.yamnet_filter:
+        print("\n[YAMNET] YAMNet filter ENABLED")
+
     accs, f1s = [], []
     for name in names:
         acc, f1, _ = report_session(name, delta, threshold)

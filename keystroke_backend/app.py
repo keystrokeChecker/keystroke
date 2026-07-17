@@ -4,7 +4,8 @@ from pathlib import Path
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 
-from predict import predict_ml_based, predict_rule_based
+from src.predictor import predict_keystroke_counts
+from src.yamnet_config import CLASSIFIER_THRESHOLD, SENSITIVITY_DELTA, GAP_THRESHOLD, MERGE_GAP_SECONDS
 from segmenter import format_output
 
 app = FastAPI(
@@ -13,7 +14,7 @@ app = FastAPI(
     version="0.1",
 )
 
-VALID_METHODS = {"rule", "ml"}
+VALID_METHODS = {"yamnet"}
 
 
 @app.get("/health")
@@ -42,9 +43,11 @@ async def _save_upload_file_tmp(upload_file: UploadFile) -> str:
 @app.post("/analyze")
 async def analyze(
     file: UploadFile = File(...),
-    method: str = Form("rule"),
-    threshold: float = Form(0.4),
-    delta: float = Form(0.07),
+    method: str = Form("yamnet"),
+    threshold: float = Form(CLASSIFIER_THRESHOLD),
+    delta: float = Form(SENSITIVITY_DELTA),
+    gap_threshold: float = Form(GAP_THRESHOLD),
+    merge_gap_seconds: float = Form(MERGE_GAP_SECONDS),
 ):
     method = method.lower()
     if method not in VALID_METHODS:
@@ -56,19 +59,19 @@ async def analyze(
     wav_path = None
     try:
         wav_path = await _save_upload_file_tmp(file)
-
-        if method == "rule":
-            counts = predict_rule_based(wav_path, threshold=threshold, delta=delta)
-        else:
-            counts = predict_ml_based(wav_path, threshold=threshold, delta=delta)
-
-        formatted = format_output(counts)
-        return {"counts": counts, "formatted": formatted}
+        counts = predict_keystroke_counts(
+            wav_path,
+            threshold=threshold,
+            delta=delta,
+            gap_threshold=gap_threshold,
+            merge_gap_seconds=merge_gap_seconds,
+        )
+        return {"counts": counts, "formatted": format_output(counts)}
     except FileNotFoundError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    except Exception as exc:
+    except Exception:
         raise HTTPException(
             status_code=500,
             detail="Audio processing failed. Check the server logs for details.",
@@ -82,3 +85,4 @@ if __name__ == "__main__":
     import uvicorn
 
     uvicorn.run("app:app", host="0.0.0.0", port=8000, reload=True)
+

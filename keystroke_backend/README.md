@@ -4,12 +4,12 @@ A local FastAPI backend for analyzing WAV recordings of physical keyboard typing
 
 ## Setup
 
-1. Open a terminal in `development/keystroke_backend`.
+1. Open a terminal in `keystroke_backend`.
 2. Create and activate a Python virtual environment:
 
 ```bash
-python3 -m venv venv
-source venv/bin/activate
+python -m venv venv
+venv\Scripts\activate
 ```
 
 3. Install dependencies:
@@ -17,6 +17,28 @@ source venv/bin/activate
 ```bash
 pip install -r requirements.txt
 ```
+
+## YAMNet Pipeline
+
+The backend now uses YAMNet embeddings plus a lightweight classifier for keystroke onset detection.
+
+Train and test in one command:
+
+```bash
+python -m src.run_yamnet_pipeline
+```
+
+You can also target specific sessions:
+
+```bash
+python -m src.run_yamnet_pipeline --names session1 session2 session3
+```
+
+That creates:
+
+- `data/yamnet_dataset/X.npy`
+- `data/yamnet_dataset/y.npy`
+- `models/yamnet_keystroke_classifier.joblib`
 
 ## Run the server
 
@@ -30,12 +52,6 @@ From your machine:
 
 ```bash
 curl http://127.0.0.1:8000/health
-```
-
-From your phone on the same Wi-Fi network, replace the host with your machine IP:
-
-```bash
-curl http://192.168.X.Y:8000/health
 ```
 
 ## API
@@ -53,9 +69,9 @@ Returns a basic connectivity response:
 Upload a WAV file using multipart form data:
 
 - `file`: the WAV audio file
-- `method`: `rule` or `ml` (default: `rule`)
-- `threshold`: optional word gap threshold in seconds
-- `delta`: optional onset sensitivity
+- `method`: `yamnet` only
+- `threshold`: word-gap threshold in seconds
+- `delta`: detector sensitivity adjustment
 
 Response:
 
@@ -68,6 +84,6 @@ Response:
 
 ## Notes
 
-- If you want to use `ml` mode, make sure `models/count_predictor.pkl` exists.
+- The backend now uses YAMNet end-to-end.
+- The YAMNet model is loaded from TensorFlow Hub, so the first run needs TensorFlow and TensorFlow Hub installed.
 - Your phone must be on the same local network as your development machine.
-- To find your local IP on Ubuntu, use `hostname -I` or `ip addr show`.
