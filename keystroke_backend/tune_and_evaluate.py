@@ -45,9 +45,6 @@ from segmenter import segment_into_words, auto_threshold, format_output
 DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
 DEFAULT_YAMNET_MODEL = os.path.join(os.path.dirname(__file__), "models", "keystroke_classifier.joblib")
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Helpers
-# ──────────────────────────────────────────────────────────────────────────────
 
 def load_ground_truth(log_path):
     """
