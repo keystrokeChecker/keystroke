@@ -1,0 +1,10 @@
+{
+    "session_name": "session1",
+    "duration_seconds": 10,
+    "sample_rate_hz": 44100,
+    "ambient_rms": 1.0513972559667535,
+    "audio_start_perf": 64141.2745959,
+    "keylogger_start_perf": 64141.2743911,
+    "sync_offset_ms": -0.20480000239331275,
+    "total_keypresses": 18
+}

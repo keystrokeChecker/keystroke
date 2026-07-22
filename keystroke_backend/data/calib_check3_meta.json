@@ -1,0 +1,10 @@
+{
+    "session_name": "calib_check3",
+    "duration_seconds": 5,
+    "sample_rate_hz": 44100,
+    "ambient_rms": 2.9894096307592557,
+    "audio_start_perf": 62901.1847735,
+    "keylogger_start_perf": 62901.1845848,
+    "sync_offset_ms": -0.18869999621529132,
+    "total_keypresses": 0
+}

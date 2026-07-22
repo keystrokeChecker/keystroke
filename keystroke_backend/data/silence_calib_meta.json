@@ -1,0 +1,10 @@
+{
+    "session_name": "silence_calib",
+    "duration_seconds": 10,
+    "sample_rate_hz": 44100,
+    "ambient_rms": 5.119726175482299,
+    "audio_start_perf": 58876.8963137,
+    "keylogger_start_perf": 58876.8961165,
+    "sync_offset_ms": -0.19720000273082405,
+    "total_keypresses": 0
+}
