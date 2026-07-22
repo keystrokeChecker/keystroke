@@ -21,7 +21,9 @@ import argparse
 import csv
 import json
 import math
+import numpy as np
 import os
+import statistics
 import struct
 import threading
 import time
@@ -121,17 +123,39 @@ def record_session(name, duration):
         frames_per_buffer=CHUNK,
     )
 
-    # 2. Silence Calibration: Record 1 second of ambient noise
-    print("Calibrating ambient background noise (please remain quiet for 1s)...")
-    calibration_frames = []
-    calibration_samples = int(sr / CHUNK)
-    for _ in range(max(1, calibration_samples)):
-        data = stream.read(CHUNK, exception_on_overflow=False)
-        calibration_frames.append(data)
+    # 2. Silence Calibration: Multi-window 3-second capture with median aggregation
+    print("Calibrating ambient background noise (please remain quiet for 3s)...")
     
-    ambient_bytes = b"".join(calibration_frames)
-    ambient_rms = calculate_rms(ambient_bytes)
-    print(f"Ambient noise calibration RMS: {ambient_rms:.2f}")
+    # Warm up input buffer and allow hardware DC blocker / AGC to settle physically (2.0s real time)
+    # We must read continuously to prevent buffer overflow and flush the initial hardware pop.
+    warmup_start = time.time()
+    while time.time() - warmup_start < 2.0:
+        stream.read(CHUNK, exception_on_overflow=False)
+        
+    num_subwindows = 6
+    subwindow_duration = 0.5  # seconds
+    chunks_per_sub = max(1, int((sr * subwindow_duration) / CHUNK))
+    
+    sub_rms_list = []
+    for _ in range(num_subwindows):
+        sub_frames = []
+        for _ in range(chunks_per_sub):
+            data = stream.read(CHUNK, exception_on_overflow=False)
+            sub_frames.append(data)
+        sub_bytes = b"".join(sub_frames)
+        sub_rms = calculate_rms(sub_bytes)
+        sub_rms_list.append(sub_rms)
+        
+    # Steady-state room background noise level (25th percentile across sub-windows)
+    # Transient spikes, mic pops, or rustles only INCREASE energy; 25th percentile isolates true ambient floor.
+    ambient_rms = float(np.percentile(sub_rms_list, 25))
+    print(f"Ambient noise calibration RMS (25th percentile of {num_subwindows} sub-windows): {ambient_rms:.2f}")
+
+    # Sanity check for non-quiet environment or spurious noise spikes
+    min_sub = min(sub_rms_list)
+    max_sub = max(sub_rms_list)
+    if min_sub > 0 and (max_sub / min_sub > 3.0) and max_sub > 5.0:
+        print(f"Warning: Ambient noise fluctuated significantly during calibration (range: {min_sub:.2f} - {max_sub:.2f}). Ensure environment is quiet.")
     if ambient_rms > 1000.0:
         print("Warning: High ambient noise level detected! The environment might be too noisy.")
 
