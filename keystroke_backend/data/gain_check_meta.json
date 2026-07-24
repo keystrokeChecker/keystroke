@@ -1,0 +1,10 @@
+{
+    "session_name": "gain_check",
+    "duration_seconds": 8,
+    "sample_rate_hz": 44100,
+    "ambient_rms": 2.2458625167812825,
+    "audio_start_perf": 64385.754582,
+    "keylogger_start_perf": 64385.7543995,
+    "sync_offset_ms": -0.18249999993713573,
+    "total_keypresses": 17
+}

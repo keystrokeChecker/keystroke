@@ -1,0 +1,9 @@
+timestamp_sec,key,is_word_boundary
+2.1096,h,False
+3.5332,e,False
+3.7780,y,False
+4.4103,Key.space,True
+4.8854,f,False
+5.1473,o,False
+5.4232,z,False
+5.8555,i,False

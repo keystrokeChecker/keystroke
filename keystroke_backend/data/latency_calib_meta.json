@@ -1,0 +1,10 @@
+{
+    "session_name": "latency_calib",
+    "duration_seconds": 15,
+    "sample_rate_hz": 44100,
+    "ambient_rms": 8.109351545312677,
+    "audio_start_perf": 57375.2650211,
+    "keylogger_start_perf": 57375.2648807,
+    "sync_offset_ms": -0.14039999950909987,
+    "total_keypresses": 10
+}

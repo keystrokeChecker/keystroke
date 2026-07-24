@@ -1,0 +1,10 @@
+{
+    "session_name": "session_calibrated_test",
+    "duration_seconds": 10,
+    "sample_rate_hz": 44100,
+    "ambient_rms": 38.815183652960876,
+    "audio_start_perf": 166294.4433378,
+    "keylogger_start_perf": 166294.4431572,
+    "sync_offset_ms": -0.18060000729747117,
+    "total_keypresses": 18
+}
