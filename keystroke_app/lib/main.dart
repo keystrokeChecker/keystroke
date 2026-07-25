@@ -115,7 +115,7 @@ class _KeystrokeHomePageState extends State<KeystrokeHomePage>
   bool _isUploading = false;
   String _statusMessage = 'Tap the red button to record';
   String _resultText = '';
-  String _selectedMethod = 'rule';
+  String _selectedMethod = 'yamnet';
   int _selectedTabIndex = 0;
 
   Duration _recordDuration = Duration.zero;
@@ -189,7 +189,7 @@ class _KeystrokeHomePageState extends State<KeystrokeHomePage>
     }
     final file = await _buildTempFile();
     await _recorder.start(
-      const RecordConfig(encoder: AudioEncoder.wav),
+      const RecordConfig(encoder: AudioEncoder.pcm16bits),
       path: file.path,
     );
     _startRecordTimer();
@@ -218,6 +218,10 @@ class _KeystrokeHomePageState extends State<KeystrokeHomePage>
       final file = File(path);
       if (!await file.exists()) {
         setState(() => _statusMessage = 'Recorded audio file not found.');
+        return;
+      }
+      if (await file.length() == 0) {
+        setState(() => _statusMessage = 'Recorded file is empty (0 bytes). Check permissions.');
         return;
       }
       setState(() {
@@ -262,7 +266,7 @@ class _KeystrokeHomePageState extends State<KeystrokeHomePage>
       final streamedResponse = await request.send();
       final response = await http.Response.fromStream(streamedResponse);
       if (response.statusCode != 200) {
-        setState(() => _statusMessage = 'Backend error ${response.statusCode}');
+        setState(() => _statusMessage = 'Backend error ${response.statusCode}: ${response.body}');
         return;
       }
       final Map<String, dynamic> body = jsonDecode(response.body);
@@ -340,8 +344,7 @@ class _KeystrokeHomePageState extends State<KeystrokeHomePage>
                   border: OutlineInputBorder(),
                 ),
                 items: const [
-                  DropdownMenuItem(value: 'rule', child: Text('Rule-based')),
-                  DropdownMenuItem(value: 'ml', child: Text('ML-based')),
+                  DropdownMenuItem(value: 'yamnet', child: Text('YAMNet (ML-based)')),
                 ],
                 onChanged: (value) {
                   if (value != null) setState(() => _selectedMethod = value);

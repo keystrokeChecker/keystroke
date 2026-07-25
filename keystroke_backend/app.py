@@ -14,7 +14,7 @@ app = FastAPI(
     version="0.1",
 )
 
-VALID_METHODS = {"yamnet"}
+VALID_METHODS = {"yamnet", "rule", "ml"}
 
 
 @app.get("/health")
@@ -51,10 +51,14 @@ async def analyze(
 ):
     method = method.lower()
     if method not in VALID_METHODS:
+        print(f"Validation Error: method {method} not in {VALID_METHODS}")
         raise HTTPException(
             status_code=400,
             detail=f"method must be one of {sorted(VALID_METHODS)}",
         )
+    
+    # Map all legacy methods to yamnet
+    method = "yamnet"
 
     wav_path = None
     try:
@@ -68,10 +72,16 @@ async def analyze(
         )
         return {"counts": counts, "formatted": format_output(counts)}
     except FileNotFoundError as exc:
+        print(f"FileNotFoundError: {exc}")
         raise HTTPException(status_code=400, detail=str(exc))
     except ValueError as exc:
+        print(f"ValueError: {exc}")
         raise HTTPException(status_code=400, detail=str(exc))
-    except Exception:
+    except EOFError as exc:
+        print(f"EOFError (Corrupted Audio): {exc}")
+        raise HTTPException(status_code=400, detail="Uploaded audio file is empty or corrupted.")
+    except Exception as exc:
+        print(f"Unexpected Exception: {exc}")
         raise HTTPException(
             status_code=500,
             detail="Audio processing failed. Check the server logs for details.",
