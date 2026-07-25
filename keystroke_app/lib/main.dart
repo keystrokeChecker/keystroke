@@ -203,7 +203,11 @@ class _KeystrokeHomePageState extends State<KeystrokeHomePage>
     }
     final file = await _buildTempFile();
     await _recorder.start(
-      const RecordConfig(encoder: AudioEncoder.pcm16bits),
+      const RecordConfig(
+        encoder: AudioEncoder.wav,
+        sampleRate: 16000,
+        numChannels: 1,
+      ),
       path: file.path,
     );
     _startRecordTimer();
