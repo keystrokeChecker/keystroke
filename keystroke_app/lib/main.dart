@@ -125,12 +125,26 @@ class _KeystrokeHomePageState extends State<KeystrokeHomePage>
   @override
   void initState() {
     super.initState();
-    _backendController.text = 'http://<YOUR_MACHINE_IP>:8000';
+    _backendController.text = 'http://192.168.8.47:8000';
     _waveController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 1200),
     )..repeat();
     _loadHistory();
+    _loadSettings();
+  }
+
+  Future<void> _loadSettings() async {
+    final prefs = await SharedPreferences.getInstance();
+    final savedUrl = prefs.getString('backend_url');
+    if (savedUrl != null && savedUrl.isNotEmpty) {
+      _backendController.text = savedUrl;
+    }
+  }
+
+  Future<void> _saveSettings() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('backend_url', _backendController.text.trim());
   }
 
   @override
@@ -245,6 +259,7 @@ class _KeystrokeHomePageState extends State<KeystrokeHomePage>
 
   Future<void> _uploadRecording(File file) async {
     final backendUrl = _backendController.text.trim();
+    await _saveSettings(); // Save URL right before uploading
     if (backendUrl.isEmpty) {
       setState(() => _statusMessage = 'Set backend URL in settings first.');
       return;
