@@ -47,3 +47,6 @@ See `docs/RELEASE_SPEC.md` for the release contract and acceptance criteria.
 - Step 2 complete: Flutter analysis and tests pass; Android debug APK builds;
   release-mode signing configuration was verified with a temporary test key.
   A permanent private release key will be supplied during final packaging.
+- Step 3 complete: deterministic backend tests cover API routing and cleanup,
+  segmentation, formatting, and all three predictor paths. Numeric-bound tests
+  are recorded as expected failures for Step 4 hardening.
