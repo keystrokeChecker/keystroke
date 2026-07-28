@@ -1,0 +1,63 @@
+# Local assistant/editor state
+.claude/
+.agents/
+.codex/
+.vscode/
+
+# Operating-system and editor files
+.DS_Store
+Thumbs.db
+Desktop.ini
+*.swp
+*.swo
+*.tmp
+*.bak
+
+# Python caches and environments
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+env/
+
+# Python packaging
+build/
+dist/
+*.egg-info/
+
+# Flutter/Dart generated state
+keystroke_app/.dart_tool/
+keystroke_app/.flutter-plugins
+keystroke_app/.flutter-plugins-dependencies
+keystroke_app/.packages
+keystroke_app/build/
+keystroke_app/coverage/
+keystroke_app/android/.gradle/
+keystroke_app/android/local.properties
+keystroke_app/android/key.properties
+keystroke_app/android/**/*.jks
+keystroke_app/android/**/*.keystore
+keystroke_app/ios/Flutter/ephemeral/
+keystroke_app/macos/Flutter/ephemeral/
+keystroke_app/windows/flutter/ephemeral/
+
+# Recorded typing data is private and can contain sensitive information.
+# Keep only the dataset documentation in version control.
+keystroke_backend/data/*
+!keystroke_backend/data/README.md
+!keystroke_backend/data/.gitkeep
+
+# Generated diagnostic plots and transient evaluation output
+keystroke_backend/data/**/*_waveform.png
+keystroke_backend/data/**/*_onsets.png
+keystroke_backend/*_waveform.png
+keystroke_backend/*_onsets.png
+
+# Local Flutter SDK placeholder from the existing workspace
+/flutter/
