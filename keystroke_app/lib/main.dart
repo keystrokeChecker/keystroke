@@ -4,7 +4,6 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:record/record.dart';
-import 'dart:ui';
 import 'package:path_provider/path_provider.dart'; // permanent storage
 import 'package:shared_preferences/shared_preferences.dart'; // history persistence
 import 'package:just_audio/just_audio.dart'; // playback
@@ -45,7 +44,8 @@ class RecordingResult {
   });
 
   // JSON serialization for SharedPreferences
-  factory RecordingResult.fromJson(Map<String, dynamic> json) => RecordingResult(
+  factory RecordingResult.fromJson(Map<String, dynamic> json) =>
+      RecordingResult(
         timestamp: DateTime.parse(json['timestamp'] as String),
         formatted: json['formatted'] as String,
         counts: List<int>.from(json['counts'] as List),
@@ -54,12 +54,12 @@ class RecordingResult {
       );
 
   Map<String, dynamic> toJson() => {
-        'timestamp': timestamp.toIso8601String(),
-        'formatted': formatted,
-        'counts': counts,
-        'method': method,
-        'filePath': filePath,
-      };
+    'timestamp': timestamp.toIso8601String(),
+    'formatted': formatted,
+    'counts': counts,
+    'method': method,
+    'filePath': filePath,
+  };
 }
 
 class KeystrokeHomePage extends StatefulWidget {
@@ -159,7 +159,10 @@ class _KeystrokeHomePageState extends State<KeystrokeHomePage> {
         return;
       }
 
-      setState(() => _statusMessage = 'Uploading audio and waiting for backend response...');
+      setState(
+        () => _statusMessage =
+            'Uploading audio and waiting for backend response...',
+      );
       await _uploadRecording(file);
     } on Exception catch (e) {
       setState(() => _statusMessage = 'Stop failed: $e');
@@ -177,27 +180,43 @@ class _KeystrokeHomePageState extends State<KeystrokeHomePage> {
     }
     final uri = Uri.tryParse(backendUrl);
     if (uri == null || (uri.scheme != 'http' && uri.scheme != 'https')) {
-      setState(() => _statusMessage = 'Enter a valid backend URL, e.g. http://192.168.1.100:8000');
+      setState(
+        () => _statusMessage =
+            'Enter a valid backend URL, e.g. http://192.168.1.100:8000',
+      );
       return;
     }
     final analyzeUri = uri.replace(
-      path: uri.path.endsWith('/') ? '${uri.path}analyze' : '${uri.path}/analyze',
+      path: uri.path.endsWith('/')
+          ? '${uri.path}analyze'
+          : '${uri.path}/analyze',
     );
     try {
       final request = http.MultipartRequest('POST', analyzeUri);
       request.fields['method'] = _selectedMethod;
-      request.files.add(await http.MultipartFile.fromPath('file', file.path, filename: 'recording.wav'));
+      request.files.add(
+        await http.MultipartFile.fromPath(
+          'file',
+          file.path,
+          filename: 'recording.wav',
+        ),
+      );
 
       final streamedResponse = await request.send();
       final response = await http.Response.fromStream(streamedResponse);
 
       if (response.statusCode != 200) {
-        setState(() => _statusMessage = 'Backend returned ${response.statusCode}: ${response.reasonPhrase}');
+        setState(
+          () => _statusMessage =
+              'Backend returned ${response.statusCode}: ${response.reasonPhrase}',
+        );
         return;
       }
 
       final Map<String, dynamic> body = jsonDecode(response.body);
-      final List<int> counts = (body['counts'] as List).map((e) => e as int).toList();
+      final List<int> counts = (body['counts'] as List)
+          .map((e) => e as int)
+          .toList();
       final String formatted = body['formatted'] as String;
 
       final result = RecordingResult(
@@ -323,21 +342,34 @@ class _KeystrokeHomePageState extends State<KeystrokeHomePage> {
             // Result Card
             const Text(
               'Keystrokes Detected',
-              style: TextStyle(fontSize: 14, color: Colors.grey, letterSpacing: 1.2),
+              style: TextStyle(
+                fontSize: 14,
+                color: Colors.grey,
+                letterSpacing: 1.2,
+              ),
             ),
             const SizedBox(height: 6),
             Card(
               color: Colors.deepPurple.shade100,
               elevation: 6,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
+              ),
               margin: const EdgeInsets.symmetric(horizontal: 24),
               child: Padding(
-                padding: const EdgeInsets.symmetric(vertical: 24, horizontal: 12),
+                padding: const EdgeInsets.symmetric(
+                  vertical: 24,
+                  horizontal: 12,
+                ),
                 child: Center(
                   child: Text(
                     _resultText.isEmpty ? '—' : _resultText,
                     textAlign: TextAlign.center,
-                    style: const TextStyle(fontSize: 28, fontWeight: FontWeight.bold, color: Colors.deepPurple),
+                    style: const TextStyle(
+                      fontSize: 28,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.deepPurple,
+                    ),
                   ),
                 ),
               ),
@@ -349,14 +381,20 @@ class _KeystrokeHomePageState extends State<KeystrokeHomePage> {
               duration: const Duration(milliseconds: 300),
               child: ElevatedButton.icon(
                 icon: Icon(_isRecording ? Icons.stop : Icons.mic),
-                label: Text(_isRecording ? 'Stop Recording' : 'Start Recording'),
+                label: Text(
+                  _isRecording ? 'Stop Recording' : 'Start Recording',
+                ),
                 onPressed: _isStopping ? null : _toggleRecording,
                 style: ElevatedButton.styleFrom(
                   backgroundColor: _isRecording ? Colors.redAccent : null,
                   padding: const EdgeInsets.symmetric(vertical: 16),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
                   elevation: _isRecording ? 12 : 4,
-                  shadowColor: _isRecording ? Colors.redAccent.withValues(alpha: 0.6) : null,
+                  shadowColor: _isRecording
+                      ? Colors.redAccent.withValues(alpha: 0.6)
+                      : null,
                 ),
               ),
             ),
@@ -364,12 +402,17 @@ class _KeystrokeHomePageState extends State<KeystrokeHomePage> {
             // Status message
             Text(
               _statusMessage,
-              style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: Colors.deepPurple.shade700),
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                color: Colors.deepPurple.shade700,
+              ),
             ),
             const SizedBox(height: 16),
             const Text(
               'History',
-              style: TextStyle(fontWeight: FontWeight.bold, color: Colors.deepPurple),
+              style: TextStyle(
+                fontWeight: FontWeight.bold,
+                color: Colors.deepPurple,
+              ),
             ),
             const SizedBox(height: 8),
             Expanded(
@@ -386,27 +429,54 @@ class _KeystrokeHomePageState extends State<KeystrokeHomePage> {
                             color: Colors.redAccent,
                             alignment: Alignment.centerRight,
                             padding: const EdgeInsets.symmetric(horizontal: 20),
-                            child: const Icon(Icons.delete, color: Colors.white),
+                            child: const Icon(
+                              Icons.delete,
+                              color: Colors.white,
+                            ),
                           ),
                           onDismissed: (_) async {
                             await _deleteEntry(index);
                           },
                           child: Card(
                             elevation: 4,
-                            margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                            margin: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 6,
+                            ),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
                             child: Padding(
                               padding: const EdgeInsets.all(12),
                               child: Row(
                                 children: [
                                   Expanded(
                                     child: Column(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
                                       children: [
-                                        Text(item.formatted, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
+                                        Text(
+                                          item.formatted,
+                                          style: const TextStyle(
+                                            fontSize: 18,
+                                            fontWeight: FontWeight.w600,
+                                          ),
+                                        ),
                                         const SizedBox(height: 4),
-                                        Text('${item.method.toUpperCase()} • ${item.counts.join('|')}', style: TextStyle(fontSize: 12, color: Colors.deepPurple.shade600)),
-                                        Text('${item.timestamp.toLocal()}', style: TextStyle(fontSize: 11, color: Colors.grey.shade600)),
+                                        Text(
+                                          '${item.method.toUpperCase()} • ${item.counts.join('|')}',
+                                          style: TextStyle(
+                                            fontSize: 12,
+                                            color: Colors.deepPurple.shade600,
+                                          ),
+                                        ),
+                                        Text(
+                                          '${item.timestamp.toLocal()}',
+                                          style: TextStyle(
+                                            fontSize: 11,
+                                            color: Colors.grey.shade600,
+                                          ),
+                                        ),
                                       ],
                                     ),
                                   ),

@@ -39,6 +39,7 @@ keystroke_app/.packages
 keystroke_app/build/
 keystroke_app/coverage/
 keystroke_app/android/.gradle/
+keystroke_app/android/.kotlin/
 keystroke_app/android/local.properties
 keystroke_app/android/key.properties
 keystroke_app/android/**/*.jks

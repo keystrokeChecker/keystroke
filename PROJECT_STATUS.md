@@ -40,3 +40,10 @@ insufficient dataset.
   held-out evaluation in Steps 6–8.
 
 See `docs/RELEASE_SPEC.md` for the release contract and acceptance criteria.
+
+## Progress
+
+- Step 1 complete: repository baseline and release contract committed.
+- Step 2 complete: Flutter analysis and tests pass; Android debug APK builds;
+  release-mode signing configuration was verified with a temporary test key.
+  A permanent private release key will be supplied during final packaging.
