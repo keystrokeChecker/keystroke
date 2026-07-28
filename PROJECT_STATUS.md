@@ -10,10 +10,10 @@ The repository contains a functional research prototype with:
 - YAMNet candidate filtering and an experimental count regressor.
 - Recorded development sessions, diagnostic scripts, and model artifacts.
 
-It is not yet a version 1 release. Confirmed blockers include an invalid
-Android Kotlin entry point, a failing Flutter test, missing backend tests,
-unhardened upload handling, unresolved production-model selection, and an
-insufficient dataset.
+It is not yet a version 1 release. The remaining blockers are model-side:
+the existing evaluation is not release-valid, the dataset has no untouched
+test partition, one production pipeline has not been selected, and physical
+Android acceptance testing and final packaging are still outstanding.
 
 ## Completion sequence
 
@@ -54,3 +54,9 @@ See `docs/RELEASE_SPEC.md` for the release contract and acceptance criteria.
   with bounded concurrency, readiness is explicit, model loads are cached and
   validated, silent prediction fallback is removed, and the backend suite has
   70 passing tests.
+- Step 5 complete: the Android client persists validated settings, supports
+  rule/ML/YAMNet selection and connection testing, bounds and cancels uploads,
+  preserves failed/cancelled/interrupted recordings for retry, filters and
+  orders history safely, tracks playback completion, serializes recorder and
+  persistence operations, disables conflicting actions, and has 32 passing
+  Flutter tests. Flutter analysis and the Android debug APK build pass.

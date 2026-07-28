@@ -107,6 +107,9 @@ Once the app launches, open **Settings** (top-right gear icon) and set the **Bac
 http://192.168.X.Y:8000
 ```
 
+Use **Test Connection**, select `Rule`, `ML`, or `YAMNet`, and save. The phone
+and backend computer must be reachable on the same trusted local network.
+
 ---
 
 ## API Reference
@@ -225,13 +228,13 @@ python predict.py data/new_recording.wav --method ml
 
 ## Flutter App Features
 
-- **Record & analyze** — Tap to start/stop recording; audio is automatically uploaded to the backend
-- **Live status messages** — Feedback at every step (recording, uploading, result received)
-- **History** — All past recordings are saved locally with timestamps and playback
-- **Audio playback** — Replay any previous recording from the history list
-- **Swipe to delete** — Remove individual history entries (audio file is also deleted)
-- **Persistent state** — History survives app restarts via `SharedPreferences`
-- **Settings panel** — Configure backend URL and prediction method (rule or ML)
+- **Record and analyze** - Record WAV audio and upload it to the configured backend.
+- **Bounded requests** - Uploads have a timeout and an explicit Cancel action.
+- **Recoverable failures** - Failed, cancelled, or interrupted recordings remain available for Retry.
+- **Persistent history** - Newest-first results and settings survive app restarts.
+- **Audio playback** - Play, pause, and replay any retained recording.
+- **Safe deletion** - Swipe a history entry to remove its local audio file.
+- **Settings and health test** - Validate a backend URL and select Rule, ML, or YAMNet.
 
 ---
 
