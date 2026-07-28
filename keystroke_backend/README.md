@@ -1,89 +1,99 @@
 # Keystroke Backend
 
-A local FastAPI backend for analyzing WAV recordings of physical keyboard typing.
+Local FastAPI service for analyzing WAV recordings of physical-keyboard typing.
 
-## Setup
+## Environment
 
-1. Open a terminal in `keystroke_backend`.
-2. Create and activate a Python virtual environment:
+Create an isolated Python environment, then install one dependency set:
 
-```bash
-python -m venv venv
-venv\Scripts\activate
-```
+```powershell
+python -m venv .venv
+.venv\Scripts\Activate.ps1
 
-3. Install dependencies:
-
-```bash
+# API runtime
 pip install -r requirements.txt
+
+# Runtime plus automated tests
+pip install -r requirements-dev.txt
+
+# Runtime plus local keyboard/audio data collection tools
+pip install -r requirements-training.txt
 ```
 
-## YAMNet Pipeline
+The pinned runtime versions are the versions used by the checked-in model
+artifacts and the automated test suite.
 
-The backend now uses YAMNet embeddings plus a lightweight classifier for keystroke onset detection.
+## Run
 
-Train and test in one command:
+For access from an Android device on the same trusted Wi-Fi network:
 
-```bash
-python -m src.run_yamnet_pipeline
+```powershell
+uvicorn app:app --host 0.0.0.0 --port 8000
 ```
 
-You can also target specific sessions:
+Running `python app.py` is loopback-only by default. It accepts these optional
+environment variables:
 
-```bash
-python -m src.run_yamnet_pipeline --names session1 session2 session3
-```
-
-That creates:
-
-- `data/yamnet_dataset/X.npy`
-- `data/yamnet_dataset/y.npy`
-- `models/yamnet_keystroke_classifier.joblib`
-
-## Run the server
-
-```bash
-uvicorn app:app --host 0.0.0.0 --port 8000 --reload
-```
-
-## Test the server
-
-From your machine:
-
-```bash
-curl http://127.0.0.1:8000/health
-```
+- `KEYSTROKE_HOST` — bind address; default `127.0.0.1`.
+- `KEYSTROKE_PORT` — port; default `8000`.
+- `KEYSTROKE_RELOAD=1` — enable development reload; disabled by default.
 
 ## API
 
 ### `GET /health`
 
-Returns a basic connectivity response:
+Lightweight process health check:
 
 ```json
 {"status": "ok"}
 ```
 
+### `GET /ready`
+
+Validates the two local joblib artifacts. It returns HTTP 503 with
+`status=degraded` if either artifact is absent or invalid. The underlying
+TensorFlow Hub YAMNet model remains lazily loaded on the first `ml` or `yamnet`
+analysis.
+
 ### `POST /analyze`
 
-Upload a WAV file using multipart form data:
+Multipart fields:
 
-- `file`: the WAV audio file
-- `method`: `yamnet` only
-- `threshold`: word-gap threshold in seconds
-- `delta`: detector sensitivity adjustment
+- `file` — required `.wav` or `.wave` upload containing a real WAV stream.
+- `method` — `rule`, `ml`, or `yamnet`; default `yamnet`.
+- `threshold` — YAMNet classifier threshold from 0 to 1.
+- `delta` — onset sensitivity greater than 0 and at most 1.
+- `gap_threshold` — optional word gap greater than 0 and at most 5 seconds.
+- `merge_gap_seconds` — duplicate-onset gap greater than 0 and at most 1 second.
 
-Response:
+The service bounds the whole multipart request, individual upload size,
+recording duration, inference concurrency, and queue wait. Temporary recordings
+are removed after success, validation errors, prediction failures, timeouts, and
+request cancellation.
 
-```json
-{
-  "counts": [3, 7],
-  "formatted": "3|7"
-}
+Example:
+
+```powershell
+curl.exe -X POST http://127.0.0.1:8000/analyze `
+  -F "file=@data/session1.wav" `
+  -F "method=rule"
 ```
 
-## Notes
+## Tests
 
-- The backend now uses YAMNet end-to-end.
-- The YAMNet model is loaded from TensorFlow Hub, so the first run needs TensorFlow and TensorFlow Hub installed.
-- Your phone must be on the same local network as your development machine.
+The default suite does not perform real TensorFlow downloads or audio-model
+inference:
+
+```powershell
+python -m pytest -q
+```
+
+Model loading, predictor routing, API validation, request limits, cancellation
+cleanup, segmentation, and readiness behavior are covered with deterministic
+fixtures.
+
+## Model status
+
+The checked-in artifacts are preserved for reproducibility, but no prediction
+method is approved as the final version 1 pipeline yet. See `models/README.md`
+and the root `PROJECT_STATUS.md`.

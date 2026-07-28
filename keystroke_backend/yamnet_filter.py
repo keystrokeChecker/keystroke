@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import os
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Iterable
 
@@ -32,6 +33,12 @@ class YAMNetCandidate:
     @property
     def audio_set_confidence(self) -> float:
         return float(max(self.typing_score, self.computer_keyboard_score))
+
+
+@dataclass(frozen=True)
+class _LoadedClassifier:
+    pipeline: object
+    feature_dimension: int | None
 
 
 def _backend_dir() -> Path:
@@ -281,16 +288,69 @@ def pool_word_features(
     ]).astype(np.float32)
 
 
-def load_classifier(classifier_path: str | os.PathLike[str]):
+def _optional_feature_dimension(value: object, *, source: str) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, np.integer)):
+        raise ValueError(f"{source} must be a positive integer")
+    dimension = int(value)
+    if dimension <= 0:
+        raise ValueError(f"{source} must be a positive integer")
+    return dimension
+
+
+@lru_cache(maxsize=8)
+def _load_classifier_artifact(resolved_path: str) -> _LoadedClassifier:
+    """Load and validate a trusted classifier artifact once per path."""
+    payload = joblib.load(resolved_path)
+    if not isinstance(payload, dict) or "pipeline" not in payload:
+        raise ValueError(f"{resolved_path} is not a supported YAMNet classifier file")
+
+    pipeline = payload["pipeline"]
+    if not callable(getattr(pipeline, "predict_proba", None)):
+        raise ValueError(
+            f"YAMNet classifier in {resolved_path} must provide a callable "
+            "predict_proba method"
+        )
+
+    payload_dimension = _optional_feature_dimension(
+        payload.get("feature_dimension"),
+        source=f"feature_dimension in {resolved_path}",
+    )
+    model_dimension = _optional_feature_dimension(
+        getattr(pipeline, "n_features_in_", None),
+        source=f"n_features_in_ on the YAMNet classifier in {resolved_path}",
+    )
+    if (
+        payload_dimension is not None
+        and model_dimension is not None
+        and payload_dimension != model_dimension
+    ):
+        raise ValueError(
+            f"YAMNet classifier feature dimension mismatch in {resolved_path}: "
+            f"payload declares {payload_dimension}, model expects {model_dimension}"
+        )
+
+    return _LoadedClassifier(
+        pipeline=pipeline,
+        feature_dimension=payload_dimension or model_dimension,
+    )
+
+
+def _classifier_artifact(
+    classifier_path: str | os.PathLike[str],
+) -> _LoadedClassifier:
     path = Path(classifier_path)
     if not path.exists():
         raise FileNotFoundError(
             f"YAMNet classifier not found: {path}. Run train_yamnet_classifier.py first."
         )
-    payload = joblib.load(path)
-    if not isinstance(payload, dict) or "pipeline" not in payload:
-        raise ValueError(f"{path} is not a supported YAMNet classifier file")
-    return payload["pipeline"]
+    return _load_classifier_artifact(str(path.resolve()))
+
+
+def load_classifier(classifier_path: str | os.PathLike[str]):
+    """Return a cached, validated classifier loaded from a trusted joblib file."""
+    return _classifier_artifact(classifier_path).pipeline
 
 
 def filter_onsets_with_yamnet(
@@ -306,10 +366,34 @@ def filter_onsets_with_yamnet(
     if not candidates:
         return np.array([], dtype=float)
     
-    features = extract_features(candidates, wav_path)
-    probabilities = load_classifier(classifier_path).predict_proba(features)[:, 1]
+    features = np.asarray(extract_features(candidates, wav_path))
+    artifact = _classifier_artifact(classifier_path)
+    if features.ndim != 2:
+        raise ValueError(
+            "YAMNet classifier features must be a two-dimensional matrix"
+        )
+    if (
+        artifact.feature_dimension is not None
+        and features.shape[1] != artifact.feature_dimension
+    ):
+        raise ValueError(
+            "YAMNet classifier feature dimension mismatch: "
+            f"model expects {artifact.feature_dimension}, "
+            f"inference produced {features.shape[1]}"
+        )
+
+    probability_matrix = np.asarray(artifact.pipeline.predict_proba(features))
+    if (
+        probability_matrix.ndim != 2
+        or probability_matrix.shape[0] != len(features)
+        or probability_matrix.shape[1] < 2
+    ):
+        raise ValueError(
+            "YAMNet classifier predict_proba must return one row with at least "
+            "two class probabilities per feature row"
+        )
+    probabilities = probability_matrix[:, 1]
     return np.asarray(
         [candidate.onset_time for candidate, score in zip(candidates, probabilities) if score >= confidence_threshold],
         dtype=float,
     )
-

@@ -1,0 +1,6 @@
+-r requirements.txt
+
+# Local data collection and diagnostics. These are not required by the API.
+PyAudio>=0.2.14,<0.3
+pynput>=1.7.7,<2.0
+matplotlib==3.11.0

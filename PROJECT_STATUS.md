@@ -48,5 +48,9 @@ See `docs/RELEASE_SPEC.md` for the release contract and acceptance criteria.
   release-mode signing configuration was verified with a temporary test key.
   A permanent private release key will be supplied during final packaging.
 - Step 3 complete: deterministic backend tests cover API routing and cleanup,
-  segmentation, formatting, and all three predictor paths. Numeric-bound tests
-  are recorded as expected failures for Step 4 hardening.
+  segmentation, formatting, and all three predictor paths.
+- Step 4 complete: uploads and request bodies are bounded and validated,
+  cancellation-safe cleanup is in place, inference is moved off the event loop
+  with bounded concurrency, readiness is explicit, model loads are cached and
+  validated, silent prediction fallback is removed, and the backend suite has
+  70 passing tests.
