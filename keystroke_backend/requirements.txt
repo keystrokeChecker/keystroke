@@ -9,3 +9,4 @@ soundfile>=0.12
 joblib>=1.4
 tensorflow>=2.16.1
 tensorflow-hub>=0.16.1
+setuptools>=68.0.0
