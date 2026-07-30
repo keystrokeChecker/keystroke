@@ -72,6 +72,8 @@ def segment_into_words(onset_times, gap_threshold=0.4):
 
 def format_output(word_counts):
     """Format counts as 'X|Y|Z' per the project spec."""
+    if not word_counts:
+        return "0"
     return "|".join(str(c) for c in word_counts)
 
 

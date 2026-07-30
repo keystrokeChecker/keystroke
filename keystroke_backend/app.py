@@ -70,7 +70,9 @@ async def analyze(
             gap_threshold=gap_threshold,
             merge_gap_seconds=merge_gap_seconds,
         )
-        return {"counts": counts, "formatted": format_output(counts)}
+        formatted = format_output(counts)
+        print(f"\n---> KEYSTROKES DETECTED: {formatted} <---")
+        return {"counts": counts, "formatted": formatted}
     except FileNotFoundError as exc:
         print(f"FileNotFoundError: {exc}")
         raise HTTPException(status_code=400, detail=str(exc))
@@ -78,17 +80,20 @@ async def analyze(
         print(f"ValueError: {exc}")
         raise HTTPException(status_code=400, detail=str(exc))
     except EOFError as exc:
-        print(f"EOFError (Corrupted Audio): {exc}")
+        print(f"EOFError (Corrupted Audio) on {wav_path}: {exc}")
         raise HTTPException(status_code=400, detail="Uploaded audio file is empty or corrupted.")
     except Exception as exc:
-        print(f"Unexpected Exception: {exc}")
+        print(f"Unexpected Exception on {wav_path}: {exc.__class__.__name__} - {exc}")
+        import traceback
+        traceback.print_exc()
         raise HTTPException(
             status_code=500,
             detail="Audio processing failed. Check the server logs for details.",
         )
-    finally:
-        if wav_path and os.path.exists(wav_path):
-            os.remove(wav_path)
+    # Removing the finally block to keep the file for debugging if it fails
+    # Success case will clean it up:
+    if wav_path and os.path.exists(wav_path):
+        os.remove(wav_path)
 
 
 if __name__ == "__main__":

@@ -290,17 +290,20 @@ class _KeystrokeHomePageState extends State<KeystrokeHomePage>
       }
       final Map<String, dynamic> body = jsonDecode(response.body);
       final List<int> counts = (body['counts'] as List).map((e) => e as int).toList();
-      final String formatted = body['formatted'] as String;
+      final String formatted = (body['formatted'] as String?)?.trim() ?? '';
+      final displayResult = formatted.isNotEmpty ? formatted : '0';
       final result = RecordingResult(
         timestamp: DateTime.now(),
-        formatted: formatted,
+        formatted: displayResult,
         counts: counts,
         method: _selectedMethod,
         filePath: file.path,
       );
       setState(() {
-        _resultText = formatted;
-        _statusMessage = 'Analysis complete';
+        _resultText = displayResult;
+        _statusMessage = counts.isEmpty || (counts.length == 1 && counts.first == 0)
+            ? 'Analysis complete — no keystrokes detected'
+            : 'Analysis complete';
         _history.insert(0, result);
       });
       await _saveHistory();
@@ -644,8 +647,8 @@ class _KeystrokeHomePageState extends State<KeystrokeHomePage>
                   itemBuilder: (context, index) {
                     final item = recentHistory[index];
                     return _RecordingListTile(
-                      title: item.formatted,
-                      subtitle: item.method.toUpperCase(),
+                      title: item.formatted.isNotEmpty ? item.formatted : '0',
+                      subtitle: '${item.counts.fold<int>(0, (a, b) => a + b)} keystrokes · ${item.method.toUpperCase()}',
                       timestamp: _formatTimestamp(item.timestamp),
                       onPlay: () => _playAudio(item.filePath),
                     );

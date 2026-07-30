@@ -182,58 +182,11 @@ def candidate_embedding_matrix(candidates: Iterable[YAMNetCandidate]) -> np.ndar
     return np.stack([item.embedding for item in values]).astype(np.float32, copy=False)
 
 
-def extract_features(candidates: Iterable[YAMNetCandidate], wav_path: str | os.PathLike[str]) -> np.ndarray:
+def extract_features(candidates: Iterable[YAMNetCandidate], wav_path: str | os.PathLike[str] = "") -> np.ndarray:
     """
-    Extract normalized features for the classifier.
-    Features:
-        - 1024-D YAMNet embedding
-        - Peak amplitude of candidate window / 95th percentile amplitude of recording
-        - RMS of candidate window / noise floor (10th percentile RMS of recording)
-        - Typing score
-        - Computer keyboard score
+    Extract raw 1024-D YAMNet embeddings for the classifier.
     """
-    candidates_list = list(candidates)
-    if not candidates_list:
-        return np.empty((0, 1028), dtype=np.float32)
-
-    # Load audio to calculate overall statistics
-    from onset_detector import normalize_recording
-    y, sr = librosa.load(str(wav_path), sr=YAMNET_SAMPLE_RATE, mono=True)
-    y, rec_noise_floor = normalize_recording(y)
-
-    abs_y = np.abs(y)
-    rec_95th = float(np.percentile(abs_y, 95)) if len(abs_y) > 0 else 1.0
-    if rec_95th == 0:
-        rec_95th = 1e-6
-    if rec_noise_floor == 0:
-        rec_noise_floor = 1e-6
-
-    features_list = []
-    window_samples = int(DEFAULT_WINDOW_SECONDS * sr)
-    for c in candidates_list:
-        centre = int(round(c.onset_time * sr))
-        start = max(0, centre - window_samples // 2)
-        end = min(len(y), centre + window_samples // 2)
-        window_y = y[start:end]
-
-        if len(window_y) > 0:
-            win_peak = float(np.max(np.abs(window_y)))
-            win_rms = float(np.sqrt(np.mean(window_y ** 2)))
-        else:
-            win_peak = 0.0
-            win_rms = 0.0
-
-        norm_peak = win_peak / rec_95th
-        norm_rms_ratio = win_rms / rec_noise_floor
-
-        # Concatenate 1024 embedding + 4 local features
-        feature_vec = np.concatenate([
-            c.embedding,
-            [norm_peak, norm_rms_ratio, c.typing_score, c.computer_keyboard_score]
-        ])
-        features_list.append(feature_vec)
-
-    return np.stack(features_list).astype(np.float32)
+    return candidate_embedding_matrix(candidates)
 
 
 def load_classifier(classifier_path: str | os.PathLike[str]):
@@ -243,28 +196,45 @@ def load_classifier(classifier_path: str | os.PathLike[str]):
             f"YAMNet classifier not found: {path}. Run train_yamnet_classifier.py first."
         )
     payload = joblib.load(path)
-    if not isinstance(payload, dict) or "pipeline" not in payload:
-        raise ValueError(f"{path} is not a supported YAMNet classifier file")
-    return payload["pipeline"]
+    if isinstance(payload, dict) and "pipeline" in payload:
+        return payload["pipeline"]
+    if hasattr(payload, "predict_proba"):
+        return payload
+    raise ValueError(f"{path} is not a supported YAMNet classifier file")
 
 
 def filter_onsets_with_yamnet(
     onsets: Iterable[float],
     wav_path: str | os.PathLike[str],
     classifier_path: str | os.PathLike[str],
-    confidence_threshold: float = 0.5,
+    confidence_threshold: float = 0.15,
 ) -> np.ndarray:
-    """Return only raw onset candidates above the trained confidence threshold."""
-    if not 0.0 <= confidence_threshold <= 1.0:
-        raise ValueError("confidence_threshold must be between 0 and 1")
+    """Return only raw onset candidates classified as valid keystrokes by the model."""
     candidates = extract_yamnet_candidates(wav_path, onsets)
     if not candidates:
         return np.array([], dtype=float)
     
     features = extract_features(candidates, wav_path)
-    probabilities = load_classifier(classifier_path).predict_proba(features)[:, 1]
-    return np.asarray(
-        [candidate.onset_time for candidate, score in zip(candidates, probabilities) if score >= confidence_threshold],
-        dtype=float,
-    )
+    model = load_classifier(classifier_path)
+    
+    filtered_onsets = []
+    if hasattr(model, "predict_proba"):
+        probabilities = model.predict_proba(features)[:, 1]
+        print(f"\n[YAMNet Filter] Using threshold = {confidence_threshold:.2f}", flush=True)
+        for candidate, score in zip(candidates, probabilities):
+            status = "KEEP" if score >= confidence_threshold else "DROP"
+            print(f"  -> Onset at {candidate.onset_time:.3f}s | ML Score: {score:.4f} | {status}", flush=True)
+            if score >= confidence_threshold:
+                filtered_onsets.append(candidate.onset_time)
+    else:
+        predictions = model.predict(features)
+        print(f"\n[YAMNet Filter] Using direct model.predict()", flush=True)
+        for candidate, pred in zip(candidates, predictions):
+            is_keystroke = bool(pred > 0)
+            status = "KEEP" if is_keystroke else "DROP"
+            print(f"  -> Onset at {candidate.onset_time:.3f}s | Predicted Class: {pred} | {status}", flush=True)
+            if is_keystroke:
+                filtered_onsets.append(candidate.onset_time)
+            
+    return np.asarray(filtered_onsets, dtype=float)
 
