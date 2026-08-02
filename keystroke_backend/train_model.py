@@ -6,12 +6,16 @@ NOTE: trained on 6/18 sessions (rest had empty keylogs, no-detect, or
 incomplete data). Treat accuracy as provisional until dataset is expanded.
 keystroke_classifier.joblib was assumed canonical based on filename
 convention, not confirmed by the team — verify before relying on this.
+Step 8 requires a quality-passing manifest. Only typing recordings assigned to
+the train split are fitted; validation IDs are recorded as tuning provenance
+and test recordings are never opened by this trainer.
 """
 
 from __future__ import annotations
 
 import argparse
-import csv
+import json
+import math
 from pathlib import Path
 
 import joblib
@@ -22,24 +26,74 @@ from sklearn.metrics import accuracy_score, mean_absolute_error
 from onset_detector import detect_onsets
 from segmenter import segment_into_words
 from src.yamnet_config import GAP_THRESHOLD_ML
+from src.training_protocol import (
+    artifact_provenance,
+    load_training_plan,
+)
 from yamnet_filter import extract_features, extract_yamnet_candidates, pool_word_features
+
+try:  # package and script invocation styles are both supported
+    from src.evaluation import parse_keylog
+except ModuleNotFoundError:  # pragma: no cover - depends on import context
+    from keystroke_backend.src.evaluation import parse_keylog
 
 DATA_DIR = Path(__file__).resolve().parent / "data"
 MODELS_DIR = Path(__file__).resolve().parent / "models"
-OUTPUT_MODEL = MODELS_DIR / "count_predictor_new.joblib"
+OUTPUT_MODEL = MODELS_DIR / "count_predictor_candidate.joblib"
 
-VALID_SESSIONS = [
-    "gain_check",
-    "gain_test",
-    "new1",
-    "new2",
-    "session1",
-    "session4",
-]
+def _default_meta_path(log_path: str | Path) -> Path:
+    """Return the capture metadata path conventionally paired with a keylog."""
+
+    path = Path(log_path)
+    stem = path.stem[:-4] if path.stem.endswith("_log") else path.stem
+    return path.with_name(f"{stem}_meta.json")
+
+
+def _read_sync_offset_ms(
+    log_path: str | Path,
+    *,
+    sync_offset_ms: float | None = None,
+    meta_path: str | Path | None = None,
+) -> float:
+    """Resolve a keylogger-to-audio offset from an explicit value or metadata.
+
+    Legacy callers passed only a log path.  For those calls, use the sibling
+    ``*_meta.json`` when present; an absent metadata file means no correction.
+    An explicit offset always wins, which keeps old scripts easy to reproduce.
+    """
+
+    if sync_offset_ms is not None:
+        try:
+            value = float(sync_offset_ms)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("sync_offset_ms must be a finite number") from exc
+    else:
+        candidate = Path(meta_path) if meta_path is not None else _default_meta_path(log_path)
+        if not candidate.is_file():
+            return 0.0
+        try:
+            with candidate.open("r", encoding="utf-8") as handle:
+                metadata = json.load(handle)
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ValueError(f"Unable to read capture metadata: {candidate}") from exc
+        raw_value = metadata.get("sync_offset_ms", 0.0)
+        try:
+            value = float(raw_value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"Metadata field sync_offset_ms must be numeric: {candidate}"
+            ) from exc
+
+    if not math.isfinite(value):
+        raise ValueError("sync_offset_ms must be a finite number")
+    return value
 
 
 def parse_ground_truth(
     log_path: str,
+    sync_offset_ms: float | None = None,
+    *,
+    meta_path: str | Path | None = None,
 ) -> tuple[list[int], list[float], list[float]]:
     """
     Parse a keylog CSV and return per-word counts and the time range of each word.
@@ -53,45 +107,24 @@ def parse_ground_truth(
     word_ends   : list[float]
         Onset timestamp of the last  keypress in each word (seconds).
     """
-    with open(log_path, newline="") as f:
-        reader = csv.DictReader(f)
-        rows = list(reader)
-
-    timestamps = [float(r["timestamp_sec"]) for r in rows]
-    word_boundaries = [
-        r.get("is_word_boundary", "").strip().lower() in ("true", "1", "yes")
-        for r in rows
-    ]
-
-    word_counts: list[int] = []
-    word_starts: list[float] = []
-    word_ends: list[float] = []
-
-    current_keys = 0
-    word_start = timestamps[0] if timestamps else 0.0
-
-    for i, is_boundary in enumerate(word_boundaries):
-        current_keys += 1
-        if is_boundary:
-            word_counts.append(current_keys)
-            word_starts.append(word_start)
-            word_ends.append(timestamps[i])
-            current_keys = 0
-            if i + 1 < len(timestamps):
-                word_start = timestamps[i + 1]
-
-    # Last word if the final boundary was missing
-    if current_keys > 0:
-        word_counts.append(current_keys)
-        word_starts.append(word_start)
-        word_ends.append(timestamps[-1] if timestamps else 0.0)
-
-    return word_counts, word_starts, word_ends
+    offset = _read_sync_offset_ms(
+        log_path,
+        sync_offset_ms=sync_offset_ms,
+        meta_path=meta_path,
+    )
+    truth = parse_keylog(log_path, sync_offset_ms=offset)
+    return (
+        list(truth.counts),
+        [word.start_time_seconds for word in truth.words],
+        [word.end_time_seconds for word in truth.words],
+    )
 
 
 def build_training_data(
-    session_names: list[str],
+    session_names: list[str] | None = None,
     pool_by: str = "segmenter",
+    *,
+    recordings=None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Build feature matrix *X* and target vector *y* from rule-based onset
@@ -123,13 +156,38 @@ def build_training_data(
     if pool_by not in {"segmenter", "groundtruth"}:
         raise ValueError("pool_by must be 'segmenter' or 'groundtruth'")
 
+    if recordings is not None and session_names is not None:
+        raise ValueError("pass session_names or recordings, not both")
+    if recordings is None:
+        if session_names is None:
+            raise ValueError("session_names or recordings is required")
+        sources = [
+            (
+                name,
+                DATA_DIR / f"{name}.wav",
+                DATA_DIR / f"{name}_log.csv",
+                DATA_DIR / f"{name}_meta.json",
+                name,
+            )
+            for name in session_names
+        ]
+    else:
+        sources = [
+            (
+                entry.id,
+                entry.wav_path,
+                entry.log_path,
+                entry.meta_path,
+                entry.setup_id,
+            )
+            for entry in recordings
+        ]
+
     X_list: list[np.ndarray] = []
     y_list: list[int] = []
     groups_list: list[str] = []
 
-    for session_name in session_names:
-        wav_path = DATA_DIR / f"{session_name}.wav"
-        log_path = DATA_DIR / f"{session_name}_log.csv"
+    for session_name, wav_path, log_path, meta_path, group_label in sources:
 
         if not wav_path.exists() or not log_path.exists():
             print(f"  Skipping {session_name}: missing .wav or .csv")
@@ -138,7 +196,9 @@ def build_training_data(
         print(f"  Processing {session_name} ...")
 
         # ── Parse ground truth ────────────────────────────────────────────
-        word_counts, word_starts, word_ends = parse_ground_truth(str(log_path))
+        word_counts, word_starts, word_ends = parse_ground_truth(
+            str(log_path), meta_path=meta_path
+        )
         print(f"    {len(word_counts)} words, true counts = {word_counts}")
 
         # ── Rule-based onset detection ────────────────────────────────────
@@ -171,7 +231,7 @@ def build_training_data(
 
                 X_list.append(pool_word_features(all_features[mask], onset_times[mask]))
                 y_list.append(word_counts[wi])
-                groups_list.append(session_name)
+                groups_list.append(group_label)
                 n_words_added += 1
         else:
             # Group onsets the way the serving path does, then label each
@@ -195,7 +255,7 @@ def build_training_data(
 
                 X_list.append(pool_word_features(all_features[mask], onset_times[mask]))
                 y_list.append(word_counts[int(np.argmax(overlaps))])
-                groups_list.append(session_name)
+                groups_list.append(group_label)
                 n_words_added += 1
 
         print(f"    Added {n_words_added} word-level samples (pool_by={pool_by})")
@@ -214,15 +274,15 @@ def main() -> None:
         )
     )
     parser.add_argument(
-        "--names",
-        nargs="+",
-        default=VALID_SESSIONS,
-        help="Session names to train on (default: all 6 valid sessions).",
+        "--manifest",
+        type=Path,
+        required=True,
+        help="Quality-passing private dataset manifest",
     )
     parser.add_argument(
         "--output",
         default=str(OUTPUT_MODEL),
-        help="Output model path (default: models/count_predictor_new.joblib).",
+        help="Output candidate model path",
     )
     parser.add_argument(
         "--pool-by",
@@ -236,9 +296,14 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    plan = load_training_plan(args.manifest)
+
     # ── Build dataset ─────────────────────────────────────────────────────
-    print(f"Building training data from {len(args.names)} session(s)...")
-    X, y, groups = build_training_data(args.names, pool_by=args.pool_by)
+    print(f"Building training data from {len(plan.training_recordings)} recording(s)...")
+    X, y, groups = build_training_data(
+        pool_by=args.pool_by,
+        recordings=plan.training_recordings,
+    )
     print(f"\n  Total word samples : {len(X)}")
     print(f"  Feature dimension : {X.shape[1]}")
     print(f"  Count distribution: {dict(zip(*np.unique(y, return_counts=True)))}")
@@ -316,18 +381,30 @@ def main() -> None:
         print(f"  {rank}. dim {idx:4d} ({region}):  {importances[idx]:.4f}")
 
     # ── Save ──────────────────────────────────────────────────────────────
-    MODELS_DIR.mkdir(parents=True, exist_ok=True)
+    fit_config = {
+        "estimator": "RandomForestRegressor",
+        "n_estimators": 200,
+        "max_depth": 12,
+        "min_samples_leaf": 2,
+        "random_state": 42,
+        "pool_by": args.pool_by,
+    }
     payload = {
         "model": final_model,
         "feature_type": "YAMNet_mean_pooled_plus_count_scalars",
         "feature_dimension": int(X.shape[1]),
         "pool_by": args.pool_by,
-        "sessions": list(args.names),
         "n_word_samples": int(len(X)),
         "held_out_mae_mean": float(np.mean(fold_mae)) if fold_mae else None,
         "held_out_acc_mean": float(np.mean(fold_acc)) if fold_acc else None,
+        **artifact_provenance(
+            plan,
+            artifact_role="count_predictor",
+            fit_config=fit_config,
+        ),
     }
     output_path = Path(args.output)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
     joblib.dump(payload, output_path)
     print(f"\nSaved model to: {output_path}")
 

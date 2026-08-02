@@ -1,5 +1,10 @@
 # Keystroke Analyzer — Pipeline Evaluation & Handoff Notes
 
+> **Legacy warning:** benchmark values in this document are not valid release
+> evidence. The old harness ignored missing/extra suffix words, one parser
+> counted separator keys as keystrokes, and the count model was evaluated on
+> its training sessions. See `../docs/EVALUATION_PROTOCOL.md`.
+
 ## 1. Executive Summary
 
 This document summarizes the current status, live HTTP verification, per-method parameter configuration, evaluation benchmarks, performance limitations, and unresolved open questions for the Keystroke Analyzer ML pipeline.
@@ -19,7 +24,7 @@ The FastAPI backend (`app.py`) has been fully verified via live HTTP POST reques
 
 ---
 
-## 3. Evaluation Benchmarks: Ground-Truth vs. Real Segmenter Output
+## 3. Legacy Evaluation Benchmarks: Ground-Truth vs. Real Segmenter Output
 
 Evaluation was performed across all 6 valid sessions (`gain_check`, `gain_test`, `new1`, `new2`, `session1`, `session4`).
 

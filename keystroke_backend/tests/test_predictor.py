@@ -90,6 +90,32 @@ def test_rule_pipeline_short_circuits_when_no_onsets_are_detected(monkeypatch) -
     assert predictor.predict_keystroke_counts_rule("silence.wav") == []
 
 
+def test_rule_trace_matches_public_counts_and_served_evidence(monkeypatch) -> None:
+    onsets = np.array([0.1, 0.25, 1.2])
+    word_groups = [[0.1, 0.25], [1.2]]
+
+    monkeypatch.setattr(
+        predictor,
+        "detect_onsets",
+        lambda *args, **kwargs: (onsets, np.array([]), 16_000),
+    )
+    monkeypatch.setattr(
+        predictor,
+        "segment_into_words",
+        lambda values, gap_threshold: ([2, 1], word_groups),
+    )
+
+    trace = predictor.predict_keystroke_counts_rule_with_trace("typing.wav")
+    public_counts = predictor.predict_keystroke_counts_rule("typing.wav")
+
+    assert public_counts == list(trace.counts) == [2, 1]
+    assert trace == predictor.PredictionTrace(
+        counts=(2, 1),
+        counted_onsets=(0.1, 0.25, 1.2),
+        word_groups=((0.1, 0.25), (1.2,)),
+    )
+
+
 def test_yamnet_pipeline_filters_onsets_then_segments_them(monkeypatch) -> None:
     calls = {}
     raw_onsets = np.array([0.1, 0.2, 0.3, 1.2])
@@ -185,6 +211,45 @@ def test_yamnet_pipeline_short_circuits_when_filter_rejects_everything(
     )
 
     assert predictor.predict_keystroke_counts("noise.wav") == []
+
+
+def test_yamnet_trace_matches_public_counts_and_filtered_evidence(
+    monkeypatch,
+) -> None:
+    raw_onsets = np.array([0.1, 0.2, 0.35, 1.3])
+    filtered_onsets = np.array([0.1, 0.35, 1.3])
+    word_groups = [[0.1, 0.35], [1.3]]
+
+    monkeypatch.setattr(
+        predictor,
+        "_DEFAULT_CLASSIFIER",
+        _ModelPath(True, "classifier.joblib"),
+    )
+    monkeypatch.setattr(
+        predictor,
+        "detect_onsets",
+        lambda *args, **kwargs: (raw_onsets, np.array([]), 16_000),
+    )
+    monkeypatch.setattr(
+        predictor,
+        "filter_onsets_with_yamnet",
+        lambda *args, **kwargs: filtered_onsets,
+    )
+    monkeypatch.setattr(
+        predictor,
+        "segment_into_words",
+        lambda values, gap_threshold: ([2, 1], word_groups),
+    )
+
+    trace = predictor.predict_keystroke_counts_with_trace("typing.wav")
+    public_counts = predictor.predict_keystroke_counts("typing.wav")
+
+    assert public_counts == list(trace.counts) == [2, 1]
+    assert trace == predictor.PredictionTrace(
+        counts=(2, 1),
+        counted_onsets=(0.1, 0.35, 1.3),
+        word_groups=((0.1, 0.35), (1.3,)),
+    )
 
 
 def test_ml_pipeline_raises_before_audio_work_when_model_is_missing(
@@ -292,6 +357,74 @@ def test_ml_pipeline_routes_features_to_model_and_rounds_predictions(
     np.testing.assert_array_equal(calls["pool"][0][0], features[:2])
     np.testing.assert_array_equal(calls["pool"][1][0], features[2:])
     assert all(values.shape == (1, 2) for values in calls["predict"])
+
+
+def test_ml_trace_matches_public_counts_and_serving_time_pooling(monkeypatch) -> None:
+    onsets = np.array([0.1, 0.2, 1.1])
+    word_groups = [[0.1], [0.2, 1.1]]
+    candidates = [
+        SimpleNamespace(onset_time=0.1),
+        SimpleNamespace(onset_time=0.2),
+        SimpleNamespace(onset_time=1.1),
+    ]
+    features = np.array([[2.0, 10.0], [3.0, 20.0], [5.0, 30.0]])
+    pooled_inputs = []
+
+    class FakeModel:
+        def predict(self, values):
+            return np.array([values[0, 0]])
+
+    monkeypatch.setattr(
+        predictor,
+        "_COUNT_PREDICTOR",
+        _ModelPath(True, "count-predictor.joblib"),
+    )
+    monkeypatch.setattr(
+        predictor.joblib,
+        "load",
+        lambda path: {"model": FakeModel(), "feature_dimension": 2},
+    )
+    monkeypatch.setattr(
+        predictor,
+        "detect_onsets",
+        lambda *args, **kwargs: (onsets, np.array([]), 16_000),
+    )
+    monkeypatch.setattr(
+        predictor,
+        "segment_into_words",
+        lambda values, gap_threshold: ([1, 2], word_groups),
+    )
+    monkeypatch.setattr(
+        predictor,
+        "extract_yamnet_candidates",
+        lambda wav_path, values: candidates,
+    )
+    monkeypatch.setattr(
+        predictor,
+        "extract_features",
+        lambda values, wav_path: features,
+    )
+
+    def fake_pool(values, times):
+        pooled_inputs.append((values.copy(), times.copy()))
+        return values.mean(axis=0)
+
+    monkeypatch.setattr(predictor, "pool_word_features", fake_pool)
+
+    trace = predictor.predict_keystroke_counts_ml_with_trace("typing.wav")
+    public_counts = predictor.predict_keystroke_counts_ml("typing.wav")
+
+    assert public_counts == list(trace.counts) == [2, 4]
+    assert trace == predictor.PredictionTrace(
+        counts=(2, 4),
+        counted_onsets=(0.1, 0.2, 1.1),
+        word_groups=((0.1,), (0.2, 1.1)),
+    )
+    assert len(pooled_inputs) == 4
+    np.testing.assert_array_equal(pooled_inputs[0][0], features[:1])
+    np.testing.assert_array_equal(pooled_inputs[1][0], features[1:])
+    np.testing.assert_array_equal(pooled_inputs[2][0], features[:1])
+    np.testing.assert_array_equal(pooled_inputs[3][0], features[1:])
 
 
 def test_ml_pipeline_falls_back_to_one_per_word_without_yamnet_candidates(

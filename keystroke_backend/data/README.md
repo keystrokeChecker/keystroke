@@ -16,5 +16,22 @@ Expected files for a session named `example` are:
 Generated YAMNet arrays under `yamnet_dataset/` are also local artifacts and
 can be regenerated from approved source sessions.
 
-Dataset quality requirements and the train/validation/test split will be added
-during Step 7 of the completion plan.
+The current sessions are contaminated development data: some were used for
+training, parameter tuning, and reported evaluation. They do not form an
+untouched test set and cannot support release claims.
+
+The metric and split contract is documented in
+`../../docs/EVALUATION_PROTOCOL.md`; the consent, capture, privacy, fixture,
+and split procedure is in `../../docs/DATASET_COLLECTION.md`.
+
+New captures must include opaque keyboard, microphone, placement, room,
+typist, capture-batch, intended-split, fixture-type, and derived setup IDs in
+their metadata. Start a private manifest from
+`../../docs/evaluation_manifest.example.json`, then run from the backend:
+
+```powershell
+python validate_dataset.py path\to\private_manifest.json
+```
+
+Do not add the populated private manifest or its quality report to Git when it
+contains sensitive paths or capture information.

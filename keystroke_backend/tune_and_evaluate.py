@@ -18,14 +18,26 @@ USAGE:
     python tune_and_evaluate.py --names session1 session2 session3 --auto
 """
 
+# LEGACY DIAGNOSTIC ONLY: this grid search predates the leakage-safe manifest
+# and configuration-lock protocol. It may explore development recordings, but
+# must never tune or score the untouched test split. Use evaluate_methods.py
+# for auditable evaluation.
+
 import argparse
-import csv
+import json
+import math
 import os
+from pathlib import Path
 
 import numpy as np
 
 from onset_detector import detect_onsets, evaluate_against_ground_truth, load_ambient_rms
 from segmenter import segment_into_words, format_output
+
+try:  # package and script invocation styles are both supported
+    from src.evaluation import parse_keylog
+except ModuleNotFoundError:  # pragma: no cover - depends on import context
+    from keystroke_backend.src.evaluation import parse_keylog
 
 DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
 
@@ -37,31 +49,51 @@ THRESHOLD_GRID       = [0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.45, 0.50, 0.60, 0.
 NOISE_GATE_GRID      = [1.2, 1.5, 2.0, 2.5, 3.0, 4.0, 6.0]
 
 
-def load_ground_truth(log_path):
+def _default_meta_path(log_path):
+    path = Path(log_path)
+    stem = path.stem[:-4] if path.stem.endswith("_log") else path.stem
+    return path.with_name(f"{stem}_meta.json")
+
+
+def _read_sync_offset_ms(log_path, sync_offset_ms=None, meta_path=None):
+    """Resolve the capture-time keylogger offset used by the central parser."""
+
+    if sync_offset_ms is not None:
+        try:
+            value = float(sync_offset_ms)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("sync_offset_ms must be a finite number") from exc
+    else:
+        candidate = Path(meta_path) if meta_path is not None else _default_meta_path(log_path)
+        if not candidate.is_file():
+            return 0.0
+        try:
+            with candidate.open("r", encoding="utf-8") as handle:
+                metadata = json.load(handle)
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ValueError(f"Unable to read capture metadata: {candidate}") from exc
+        raw_value = metadata.get("sync_offset_ms", 0.0)
+        try:
+            value = float(raw_value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"Metadata field sync_offset_ms must be numeric: {candidate}"
+            ) from exc
+
+    if not math.isfinite(value):
+        raise ValueError("sync_offset_ms must be a finite number")
+    return value
+
+
+def load_ground_truth(log_path, sync_offset_ms=None, *, meta_path=None):
     """
     Read a keylog CSV and return:
         true_counts : list[int]   — keystrokes per word
         gt_times    : list[float] — timestamp of every non-boundary keypress
     """
-    rows = list(csv.DictReader(open(log_path, "r")))
-
-    true_counts: list[int]   = []
-    gt_times:    list[float] = []
-    current_count = 0
-
-    for row in rows:
-        if row["is_word_boundary"] == "True":
-            if current_count > 0:
-                true_counts.append(current_count)
-            current_count = 0
-        else:
-            current_count += 1
-            gt_times.append(float(row["timestamp_sec"]))
-
-    if current_count > 0:
-        true_counts.append(current_count)
-
-    return true_counts, gt_times
+    offset = _read_sync_offset_ms(log_path, sync_offset_ms, meta_path)
+    truth = parse_keylog(log_path, sync_offset_ms=offset)
+    return list(truth.counts), list(truth.event_times)
 
 
 def word_accuracy(true_counts, predicted_counts):

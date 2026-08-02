@@ -92,6 +92,47 @@ Model loading, predictor routing, API validation, request limits, cancellation
 cleanup, segmentation, and readiness behavior are covered with deterministic
 fixtures.
 
+## Evaluation
+
+Release evaluation is manifest-driven and invokes the same trace-producing
+rule, ML, and YAMNet functions used by the API. The manifest must assign whole
+recordings to `train`, `validation`, `test`, or `diagnostic` and keep each
+`setup_id` in only one leakage-controlled split.
+
+```powershell
+python evaluate_methods.py `
+  --manifest data/evaluation_manifest.json `
+  --split diagnostic `
+  --methods rule `
+  --output-json results/diagnostic.json
+```
+
+Fresh private datasets use the consent and split procedure in
+`../docs/DATASET_COLLECTION.md`. Capture metadata includes every
+leakage-relevant setup field, the intended split, and fixture type. Validate a
+populated private manifest before training or evaluation:
+
+```powershell
+python validate_dataset.py data/evaluation_manifest.json `
+  --output results/dataset_quality.json
+```
+
+The validator checks PCM format, duration, clipping, near-silence, synchronized
+truth, structured metadata, and minimum train/validation/test negative-fixture
+coverage. Existing recordings remain diagnostic-only.
+
+The candidate-training, deterministic validation-selection, artifact
+promotion, and untouched-test workflow is in `../docs/MODEL_RELEASE.md`.
+
+Diagnostic and legacy-data runs are always marked `valid_for_release: false`.
+`select_production_method.py` turns a multi-method validation result into one
+artifact-bound configuration lock. Evaluate the untouched test split with
+exactly that selected method and pass the lock as `--locked-config-sha256`.
+Test evidence is release-valid only when the lock
+matches, fixed 80 ms metrics are unchanged, required negative fixtures are
+present, and learned artifacts carry complete, non-contaminating provenance.
+The full contract is in `../docs/EVALUATION_PROTOCOL.md`.
+
 ## Model status
 
 The checked-in artifacts are preserved for reproducibility, but no prediction

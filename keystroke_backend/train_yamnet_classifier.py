@@ -1,7 +1,7 @@
 """Train a logistic-regression filter on YAMNet onset embeddings.
 
-Example:
-    python train_yamnet_classifier.py --names session1 session2 session3
+Only quality-passing manifest train recordings are fitted. Validation and test
+recordings are not used as fitting samples.
 """
 
 from __future__ import annotations
@@ -17,11 +17,12 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
 from onset_detector import detect_onsets, evaluate_against_ground_truth
-from tune_and_evaluate import load_ground_truth
+from src.evaluation import parse_keylog
+from src.training_protocol import artifact_provenance, load_training_plan, read_sync_offset_ms
 from yamnet_filter import extract_features, extract_yamnet_candidates
 
 DATA_DIR = Path(__file__).resolve().parent / "data"
-DEFAULT_MODEL_PATH = Path(__file__).resolve().parent / "models" / "keystroke_classifier.joblib"
+DEFAULT_MODEL_PATH = Path(__file__).resolve().parent / "models" / "keystroke_classifier_candidate.joblib"
 
 
 def label_candidates(onsets: np.ndarray, ground_truth: list[float], tolerance: float) -> np.ndarray:
@@ -55,8 +56,7 @@ def validate_on_new_recording(wav_path: str, log_path: str, classifier_path: str
     from yamnet_filter import filter_onsets_with_yamnet
 
     # 1. Load ground truth
-    _, gt_times = load_ground_truth(log_path)
-    gt_times = np.array(gt_times)
+    gt_times = np.array(parse_keylog(log_path).event_times)
     
     # 2. Run raw detect_onsets
     raw_onsets, _, _ = detect_onsets(wav_path)
@@ -83,7 +83,15 @@ def validate_on_new_recording(wav_path: str, log_path: str, classifier_path: str
     return filtered_eval
 
 
-def train_and_evaluate(X: np.ndarray, y: np.ndarray, groups: np.ndarray, names: list[str], model_path: Path) -> None:
+def train_and_evaluate(
+    X: np.ndarray,
+    y: np.ndarray,
+    groups: np.ndarray,
+    names: list[str],
+    model_path: Path,
+    *,
+    provenance: dict[str, object] | None = None,
+) -> None:
     """
     Train final classifier, perform cross-validation, and log outputs.
     """
@@ -119,44 +127,47 @@ def train_and_evaluate(X: np.ndarray, y: np.ndarray, groups: np.ndarray, names: 
     final_model = make_pipeline()
     final_model.fit(X, y)
     model_path.parent.mkdir(parents=True, exist_ok=True)
-    joblib.dump(
-        {
-            "pipeline": final_model,
-            "feature_type": "normalized_yamnet_features",
-            "feature_dimension": int(X.shape[1]),
-            "sessions": list(names),
-        },
-        model_path,
-    )
+    payload = {
+        "pipeline": final_model,
+        "feature_type": "normalized_yamnet_features",
+        "feature_dimension": int(X.shape[1]),
+    }
+    if provenance:
+        payload.update(provenance)
+    joblib.dump(payload, model_path)
     print(f"\nSaved final classifier trained on {len(y)} candidates to: {model_path}")
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Train a YAMNet keystroke candidate filter.")
-    parser.add_argument("--names", nargs="+", default=["session1", "session2", "session3"])
+    parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--delta", type=float, default=0.07, help="Detector delta used to make candidates")
     parser.add_argument("--tolerance", type=float, default=0.08, help="Keylog match tolerance in seconds")
     parser.add_argument("--model-path", default=str(DEFAULT_MODEL_PATH))
-    parser.add_argument("--validate-wav", type=str, default=None, help="Path to WAV file for validation")
-    parser.add_argument("--validate-log", type=str, default=None, help="Path to CSV log file for validation")
-    parser.add_argument("--threshold", type=float, default=0.3, help="Confidence threshold for YAMNet filter (default: 0.3)")
     args = parser.parse_args()
-
-    # If validation arguments are provided, perform validation and exit
-    if args.validate_wav and args.validate_log:
-        validate_on_new_recording(args.validate_wav, args.validate_log, args.model_path, confidence_threshold=args.threshold)
-        return
 
     if args.tolerance <= 0:
         parser.error("--tolerance must be greater than zero")
 
+    plan = load_training_plan(args.manifest)
+    fitted_entries = plan.training_recordings + plan.training_negative_recordings
+    names = sorted({entry.setup_id for entry in fitted_entries})
+
     feature_sets, label_sets, group_sets = [], [], []
     print("Building YAMNet training set from rule-based onset candidates...")
-    for name in args.names:
-        wav_path, log_path = DATA_DIR / f"{name}.wav", DATA_DIR / f"{name}_log.csv"
-        if not wav_path.exists() or not log_path.exists():
-            raise FileNotFoundError(f"Missing WAV or keylog for session '{name}' in {DATA_DIR}")
-        _, ground_truth = load_ground_truth(str(log_path))
+    for entry in fitted_entries:
+        name = entry.id
+        wav_path, log_path = entry.wav_path, entry.log_path
+        if entry.is_negative_fixture:
+            ground_truth = []
+        else:
+            if log_path is None:
+                raise RuntimeError(f"Training recording {name!r} has no keylog")
+            truth = parse_keylog(
+                log_path,
+                sync_offset_ms=read_sync_offset_ms(entry),
+            )
+            ground_truth = list(truth.event_times)
         onsets, _, _ = detect_onsets(str(wav_path), delta=args.delta)
         labels = label_candidates(onsets, ground_truth, args.tolerance)
         baseline = evaluate_against_ground_truth(onsets, ground_truth, tolerance=args.tolerance)
@@ -170,7 +181,7 @@ def main() -> None:
             features = extract_features(candidates, str(wav_path))
             feature_sets.append(features)
             label_sets.append(labels)
-            group_sets.append(np.full(len(labels), name, dtype=object))
+            group_sets.append(np.full(len(labels), entry.setup_id, dtype=object))
 
     if not feature_sets:
         raise RuntimeError("No onset candidates were produced; lower --delta and retry")
@@ -178,7 +189,27 @@ def main() -> None:
     if len(np.unique(y)) != 2:
         raise RuntimeError("Training data needs both positive and negative onset candidates")
 
-    train_and_evaluate(X, y, groups, args.names, Path(args.model_path))
+    fit_config = {
+        "estimator": "StandardScaler+LogisticRegression",
+        "class_weight": "balanced",
+        "max_iter": 2000,
+        "random_state": 42,
+        "candidate_delta": args.delta,
+        "label_tolerance_seconds": args.tolerance,
+    }
+    train_and_evaluate(
+        X,
+        y,
+        groups,
+        names,
+        Path(args.model_path),
+        provenance=artifact_provenance(
+            plan,
+            artifact_role="yamnet_keystroke_classifier",
+            fit_config=fit_config,
+            training_recordings=fitted_entries,
+        ),
+    )
 
 
 if __name__ == "__main__":

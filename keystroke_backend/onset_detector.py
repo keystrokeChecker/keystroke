@@ -46,6 +46,16 @@ import librosa
 import numpy as np
 from scipy.signal import butter, filtfilt, find_peaks
 
+# Keep this module runnable both as ``python keystroke_backend/onset_detector.py``
+# (where ``src`` is a sibling package) and as ``keystroke_backend.onset_detector``
+# from the repository root.  The compatibility wrapper below intentionally uses
+# the central evaluator so all callers share one ordered, one-to-one definition
+# of an onset match.
+try:  # pragma: no cover - which import succeeds depends on invocation style
+    from src.evaluation import GroundTruth, match_events
+except ModuleNotFoundError:  # pragma: no cover - exercised by package imports
+    from keystroke_backend.src.evaluation import GroundTruth, match_events
+
 
 # ── Internal DSP helpers ──────────────────────────────────────────────────────
 
@@ -466,37 +476,41 @@ def evaluate_against_ground_truth(
     Returns dict with: true_positives, false_positives, false_negatives,
                        precision, recall, f1.
     """
-    matched_gt  = set()
-    matched_det = set()
+    # ``GroundTruth`` is accepted as a convenience for newer callers, while
+    # the historical API still accepts a plain list/NumPy array of timestamps.
+    # The central matcher validates ordering, maximizes one-to-one matches, and
+    # breaks ties by minimum timing error; this avoids the prefix/greedy skew
+    # that used to differ between evaluation scripts.
+    if isinstance(ground_truth_times, GroundTruth) or hasattr(
+        ground_truth_times, "event_times"
+    ):
+        ground_truth_times = ground_truth_times.event_times
 
-    for i, det_t in enumerate(onset_times):
-        for j, gt_t in enumerate(ground_truth_times):
-            if j in matched_gt:
-                continue
-            if abs(det_t - gt_t) <= tolerance:
-                matched_gt.add(j)
-                matched_det.add(i)
-                break
+    def _as_time_values(values):
+        if values is None:
+            return ()
+        if isinstance(values, np.ndarray):
+            return np.asarray(values, dtype=float).reshape(-1).tolist()
+        # ``list`` also preserves support for tuples, ranges, and generators;
+        # the central matcher then performs finite/order validation.
+        return [float(value) for value in values]
 
-    tp = len(matched_det)
-    fp = len(onset_times) - tp
-    fn = len(ground_truth_times) - len(matched_gt)
+    onset_values = _as_time_values(onset_times)
+    truth_values = _as_time_values(ground_truth_times)
 
-    precision = tp / len(onset_times)        if len(onset_times)        else 0.0
-    recall    = tp / len(ground_truth_times) if len(ground_truth_times) else 0.0
-    f1        = (
-        2 * precision * recall / (precision + recall)
-        if (precision + recall) > 0
-        else 0.0
+    metrics = match_events(
+        truth_values,
+        onset_values,
+        tolerance_seconds=tolerance,
     )
 
     return {
-        "true_positives":  tp,
-        "false_positives": fp,
-        "false_negatives": fn,
-        "precision": round(precision, 3),
-        "recall":    round(recall,    3),
-        "f1":        round(f1,        3),
+        "true_positives": metrics.true_positives,
+        "false_positives": metrics.false_positives,
+        "false_negatives": metrics.false_negatives,
+        "precision": round(metrics.precision, 3),
+        "recall": round(metrics.recall, 3),
+        "f1": round(metrics.f1, 3),
     }
 
 

@@ -1,0 +1,78 @@
+{
+  "schema_version": 1,
+  "recordings": [
+    {
+      "id": "train_typing_001",
+      "wav": "../keystroke_backend/data/train_typing_001.wav",
+      "log": "../keystroke_backend/data/train_typing_001_log.csv",
+      "meta": "../keystroke_backend/data/train_typing_001_meta.json",
+      "split": "train",
+      "setup_id": "setup-replace-from-metadata",
+      "tags": ["typing"],
+      "non_keyboard": false,
+      "silence": false
+    },
+    {
+      "id": "validation_typing_001",
+      "wav": "../keystroke_backend/data/validation_typing_001.wav",
+      "log": "../keystroke_backend/data/validation_typing_001_log.csv",
+      "meta": "../keystroke_backend/data/validation_typing_001_meta.json",
+      "split": "validation",
+      "setup_id": "setup-replace-from-metadata",
+      "tags": ["typing"],
+      "non_keyboard": false,
+      "silence": false
+    },
+    {
+      "id": "validation_silence_001",
+      "wav": "../keystroke_backend/data/validation_silence_001.wav",
+      "meta": "../keystroke_backend/data/validation_silence_001_meta.json",
+      "split": "validation",
+      "setup_id": "setup-replace-from-metadata",
+      "tags": ["room-ambience"],
+      "non_keyboard": false,
+      "silence": true
+    },
+    {
+      "id": "validation_non_keyboard_001",
+      "wav": "../keystroke_backend/data/validation_non_keyboard_001.wav",
+      "meta": "../keystroke_backend/data/validation_non_keyboard_001_meta.json",
+      "split": "validation",
+      "setup_id": "setup-replace-from-metadata",
+      "tags": ["background-activity"],
+      "non_keyboard": true,
+      "silence": false
+    },
+    {
+      "id": "test_typing_001",
+      "wav": "../keystroke_backend/data/test_typing_001.wav",
+      "log": "../keystroke_backend/data/test_typing_001_log.csv",
+      "meta": "../keystroke_backend/data/test_typing_001_meta.json",
+      "split": "test",
+      "setup_id": "setup-replace-from-metadata",
+      "tags": ["typing", "untouched"],
+      "non_keyboard": false,
+      "silence": false
+    },
+    {
+      "id": "test_silence_001",
+      "wav": "../keystroke_backend/data/test_silence_001.wav",
+      "meta": "../keystroke_backend/data/test_silence_001_meta.json",
+      "split": "test",
+      "setup_id": "setup-replace-from-metadata",
+      "tags": ["room-ambience", "untouched"],
+      "non_keyboard": false,
+      "silence": true
+    },
+    {
+      "id": "test_non_keyboard_001",
+      "wav": "../keystroke_backend/data/test_non_keyboard_001.wav",
+      "meta": "../keystroke_backend/data/test_non_keyboard_001_meta.json",
+      "split": "test",
+      "setup_id": "setup-replace-from-metadata",
+      "tags": ["background-activity", "untouched"],
+      "non_keyboard": true,
+      "silence": false
+    }
+  ]
+}

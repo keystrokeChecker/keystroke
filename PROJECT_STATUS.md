@@ -60,3 +60,31 @@ See `docs/RELEASE_SPEC.md` for the release contract and acceptance criteria.
   orders history safely, tracks playback completion, serializes recorder and
   persistence operations, disables conflicting actions, and has 32 passing
   Flutter tests. Flutter analysis and the Android debug APK build pass.
+- Step 6 complete: evaluation is manifest-driven and invokes the production
+  Rule, ML, and YAMNet trace paths; separator rows no longer inflate ground
+  truth; deterministic sequence alignment penalizes missing and extra words;
+  event timing, word-boundary, silence, and non-keyboard metrics are reported;
+  setup, model-provenance, duplicate-path, duplicate-content, and test-data
+  leakage checks run before inference; results bind configuration, manifest,
+  artifacts, and recording bytes with SHA-256 hashes. Untouched-test evidence
+  requires one validation-locked method/configuration and the fixed 80 ms
+  metric settings. The backend suite has 128 passing tests. Existing recordings
+  and benchmark JSON remain diagnostic-only and cannot support release claims.
+- Step 7 software controls complete: capture now records opaque setup, batch,
+  intended-split, and fixture metadata; a deterministic validator checks WAV
+  format/duration, clipping, near-silence, keylog truth, metadata consistency,
+  and minimum release fixture coverage; a private manifest template and
+  consented collection protocol are documented. Existing local sessions remain
+  diagnostic-only, and the backend suite now has 132 passing tests. Step 7
+  cannot be closed until a person captures fresh,
+  consented train/validation/test, silence, and non-keyboard recordings and the
+  resulting private manifest passes `validate_dataset.py`.
+- Step 8 software controls complete: both learned-model trainers now require a
+  quality-passing manifest, fit only train typing recordings, and embed
+  manifest/setup/recording/configuration provenance. Validation evaluation can
+  bind candidate artifacts without changing runtime files. Deterministic
+  selection rejects silence detections and incomplete provenance, ranks the
+  remaining methods, and emits a single-method lock bound to the selected
+  artifact SHA-256. Actual retraining, selection, and untouched-test scoring
+  remain blocked on the fresh Step 7 recordings. The backend suite has 137
+  passing tests.

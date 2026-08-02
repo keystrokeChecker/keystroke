@@ -19,23 +19,23 @@ Do not use this to capture another person's keystrokes without permission.
 
 import argparse
 import csv
+import hashlib
 import json
 import math
 import numpy as np
 import os
+import re
 import statistics
 import struct
 import threading
 import time
 import wave
 
-import pyaudio
-from pynput import keyboard
-
 SAMPLE_RATE = 44100
 CHANNELS = 1
 CHUNK = 1024
-FORMAT = pyaudio.paInt16
+
+IDENTIFIER_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 
 DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
 os.makedirs(DATA_DIR, exist_ok=True)
@@ -45,6 +45,9 @@ class KeyLogger:
     """Logs every keypress with a timestamp relative to recording start."""
 
     def __init__(self):
+        from pynput import keyboard
+
+        self.keyboard = keyboard
         self.start_time = None
         self.events = []  # list of (relative_time, key_str, is_boundary)
         self.listener = keyboard.Listener(on_press=self._on_press)
@@ -57,7 +60,11 @@ class KeyLogger:
         except AttributeError:
             key_str = str(key)
             # space, enter, and tab are treated as word boundaries
-            is_boundary = key in (keyboard.Key.space, keyboard.Key.enter, keyboard.Key.tab)
+            is_boundary = key in (
+                self.keyboard.Key.space,
+                self.keyboard.Key.enter,
+                self.keyboard.Key.tab,
+            )
         self.events.append((t, key_str, is_boundary))
 
     def start(self, start_time):
@@ -86,7 +93,47 @@ def calculate_rms(audio_data):
     return math.sqrt(sum_squares / count)
 
 
-def record_session(name, duration):
+def valid_identifier(value):
+    """Argparse validator for privacy-preserving IDs, not free-form labels."""
+    if not IDENTIFIER_PATTERN.fullmatch(value):
+        raise argparse.ArgumentTypeError(
+            "must be 1-64 characters using letters, numbers, '_' or '-'"
+        )
+    return value
+
+
+def positive_duration(value):
+    try:
+        duration = float(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("must be a number") from exc
+    if not math.isfinite(duration) or duration <= 0:
+        raise argparse.ArgumentTypeError("must be positive and finite")
+    return duration
+
+
+def derive_setup_id(capture_metadata):
+    """Return a stable opaque ID for all leakage-relevant setup fields."""
+    fields = (
+        "keyboard_id",
+        "microphone_id",
+        "placement_id",
+        "room_id",
+        "typist_id",
+        "capture_batch_id",
+    )
+    canonical = json.dumps(
+        {field: capture_metadata[field] for field in fields},
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return "setup-" + hashlib.sha256(canonical).hexdigest()[:16]
+
+
+def record_session(name, duration, capture_metadata):
+    import pyaudio
+
+    audio_format = pyaudio.paInt16
     wav_path = os.path.join(DATA_DIR, f"{name}.wav")
     log_path = os.path.join(DATA_DIR, f"{name}_log.csv")
     meta_path = os.path.join(DATA_DIR, f"{name}_meta.json")
@@ -107,7 +154,7 @@ def record_session(name, duration):
     if default_rate != SAMPLE_RATE and device_index is not None:
         try:
             # Test if 44100Hz is supported
-            if not pa.is_format_supported(SAMPLE_RATE, input_device=device_index, input_channels=CHANNELS, input_format=FORMAT):
+            if not pa.is_format_supported(SAMPLE_RATE, input_device=device_index, input_channels=CHANNELS, input_format=audio_format):
                 sr = default_rate
                 print(f"Warning: 44100Hz not supported. Falling back to default rate of {sr}Hz.")
         except Exception:
@@ -116,7 +163,7 @@ def record_session(name, duration):
 
     # Open PyAudio Stream
     stream = pa.open(
-        format=FORMAT,
+        format=audio_format,
         channels=CHANNELS,
         rate=sr,
         input=True,
@@ -201,11 +248,13 @@ def record_session(name, duration):
     stream.stop_stream()
     stream.close()
     
+    sample_width_bytes = pa.get_sample_size(audio_format)
+    recorded_bytes = b"".join(frames)
     wf = wave.open(wav_path, "wb")
     wf.setnchannels(CHANNELS)
-    wf.setsampwidth(pa.get_sample_size(FORMAT))
+    wf.setsampwidth(sample_width_bytes)
     wf.setframerate(sr)
-    wf.writeframes(b"".join(frames))
+    wf.writeframes(recorded_bytes)
     wf.close()
     
     pa.terminate()
@@ -215,15 +264,23 @@ def record_session(name, duration):
 
     # Save Metadata JSON
     sync_offset_ms = (timing_info["keylogger_start_perf"] - timing_info["audio_stream_start_perf"]) * 1000.0
+    actual_duration = len(recorded_bytes) / (sr * CHANNELS * sample_width_bytes)
+    setup_id = derive_setup_id(capture_metadata)
     meta = {
+        "recording_id": name,
         "session_name": name,
-        "duration_seconds": duration,
+        "duration_seconds": actual_duration,
+        "requested_duration_seconds": duration,
         "sample_rate_hz": sr,
+        "channels": CHANNELS,
+        "sample_width_bytes": sample_width_bytes,
         "ambient_rms": ambient_rms,
         "audio_start_perf": timing_info["audio_stream_start_perf"],
         "keylogger_start_perf": timing_info["keylogger_start_perf"],
         "sync_offset_ms": sync_offset_ms,
         "total_keypresses": len(kl.events),
+        "setup_id": setup_id,
+        **capture_metadata,
     }
     with open(meta_path, "w") as f:
         json.dump(meta, f, indent=4)
@@ -235,6 +292,7 @@ def record_session(name, duration):
     print(f"  Total Keypresses     : {len(kl.events)}")
     print(f"  Ambient Noise RMS    : {ambient_rms:.2f}")
     print(f"  Audio/Keylog Offset  : {sync_offset_ms:.3f}ms")
+    print(f"  Setup ID             : {setup_id}")
     
     if len(kl.events) > 1:
         gaps = [kl.events[i][0] - kl.events[i-1][0] for i in range(1, len(kl.events))]
@@ -246,21 +304,52 @@ def record_session(name, duration):
 
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--name", required=True, help="Session name, e.g. session1")
-    parser.add_argument("--duration", type=int, default=15, help="Recording duration in seconds")
+    parser = argparse.ArgumentParser(
+        description="Record consented typing audio with leakage-safe metadata."
+    )
+    parser.add_argument("--name", required=True, type=valid_identifier, help="Opaque recording ID")
+    parser.add_argument("--duration", type=positive_duration, default=15.0, help="Recording duration in seconds")
     parser.add_argument("--repeat", type=int, default=1, help="Number of short sessions to record back-to-back")
+    parser.add_argument("--keyboard-id", required=True, type=valid_identifier)
+    parser.add_argument("--microphone-id", required=True, type=valid_identifier)
+    parser.add_argument("--placement-id", required=True, type=valid_identifier)
+    parser.add_argument("--room-id", required=True, type=valid_identifier)
+    parser.add_argument("--typist-id", required=True, type=valid_identifier)
+    parser.add_argument("--capture-batch-id", required=True, type=valid_identifier)
+    parser.add_argument(
+        "--intended-split",
+        required=True,
+        choices=("train", "validation", "test", "diagnostic"),
+    )
+    parser.add_argument(
+        "--fixture-type",
+        required=True,
+        choices=("typing", "silence", "non_keyboard"),
+    )
     args = parser.parse_args()
+
+    if args.repeat < 1:
+        parser.error("--repeat must be at least 1")
+
+    capture_metadata = {
+        "keyboard_id": args.keyboard_id,
+        "microphone_id": args.microphone_id,
+        "placement_id": args.placement_id,
+        "room_id": args.room_id,
+        "typist_id": args.typist_id,
+        "capture_batch_id": args.capture_batch_id,
+        "intended_split": args.intended_split,
+        "fixture_type": args.fixture_type,
+    }
 
     if args.repeat > 1:
         for i in range(1, args.repeat + 1):
             session_name = f"{args.name}_auto_{i}"
             input(f"Ready to record session {i}/{args.repeat} ({session_name}). Press Enter when ready...")
-            record_session(session_name, args.duration)
+            record_session(session_name, args.duration, capture_metadata)
     else:
-        record_session(args.name, args.duration)
+        record_session(args.name, args.duration, capture_metadata)
 
 
 if __name__ == "__main__":
     main()
-

@@ -1,4 +1,5 @@
 {
+  "legacy_warning": "INVALID FOR RELEASE: prefix-truncated, in-sample evaluation with incorrect separator-inclusive ground truth",
   "timestamp": "2026-07-28T11:29:11.685463",
   "config": {
     "delta": 0.07,

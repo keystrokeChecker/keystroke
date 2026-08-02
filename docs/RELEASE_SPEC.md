@@ -48,7 +48,8 @@ their own platform configuration and physical-device verification.
 The final thresholds will be confirmed after the corrected evaluation harness
 is implemented. The initial target is:
 
-- At least 85% exact per-word count accuracy on untouched test sessions.
+- At least 85% aligned exact-word accuracy on untouched test sessions, with
+  missing and extra predicted words included in the denominator.
 - Word-boundary precision, recall, and F1 reported separately.
 - Full-sequence exact-match accuracy reported.
 - Missing and extra predicted words penalized by the primary metric.

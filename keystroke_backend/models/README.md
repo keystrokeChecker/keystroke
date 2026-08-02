@@ -10,8 +10,9 @@ the format can execute Python code during deserialization.
   used by the `yamnet` prediction path.
 - `count_predictor_new.joblib` — experimental per-word RandomForest count
   regressor used by the `ml` path. Its embedded metadata says it was pooled by
-  ground-truth word boundaries, so it is not yet approved as a production
-  model.
+  ground-truth word boundaries, contains separator-inflated targets, and was
+  scored on the same six sessions used for training. It is not approved as a
+  production model.
 - `candidate_classifier.joblib` — older hand-crafted candidate classifier.
 - `yamnet_keystroke_classifier.joblib` — older/larger YAMNet classifier
   artifact.
@@ -19,6 +20,14 @@ the format can execute Python code during deserialization.
   predictor payload.
 - `yamnet_class_map.csv` — YAMNet class-name mapping.
 
-No model is designated canonical for version 1 yet. Step 8 will produce a
-versioned model manifest, archive obsolete experiments, and select one serving
-pipeline using untouched test data.
+No model is designated canonical for version 1 yet. Step 8 now provides
+manifest-only trainers and deterministic validation selection. Candidate
+artifacts use `count_predictor_candidate.joblib` and
+`keystroke_classifier_candidate.joblib`; they must not replace runtime files
+until `production_selection.json` locks one method and artifact hash. The
+untouched test split verifies the already-selected pipeline and never chooses
+it. See `../../docs/MODEL_RELEASE.md`.
+
+`count_predictor_new.joblib` and `exp_gt_1032.joblib` are byte-identical legacy
+artifacts. Keeping both temporarily documents the inherited state; neither is
+release evidence.

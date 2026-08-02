@@ -39,6 +39,37 @@ class _LoadedCountPredictor:
     feature_dimension: int | None
 
 
+@dataclass(frozen=True)
+class PredictionTrace:
+    """Prediction output plus the serving-time onset evidence behind it.
+
+    Tuples keep the frozen trace immutable while remaining directly encodable
+    as JSON arrays. ``counted_onsets`` is the exact onset sequence passed to
+    serving-time word segmentation, and ``word_groups`` is that segmenter's
+    output. For the YAMNet path this means classifier-filtered onsets; the rule
+    and count-regressor paths segment the detected onsets directly.
+    """
+
+    counts: tuple[int, ...]
+    counted_onsets: tuple[float, ...]
+    word_groups: tuple[tuple[float, ...], ...]
+
+
+def _make_prediction_trace(
+    counts,
+    counted_onsets,
+    word_groups,
+) -> PredictionTrace:
+    """Normalize NumPy scalars and mutable segmenter output for a trace."""
+    return PredictionTrace(
+        counts=tuple(int(count) for count in counts),
+        counted_onsets=tuple(float(onset) for onset in counted_onsets),
+        word_groups=tuple(
+            tuple(float(onset) for onset in group) for group in word_groups
+        ),
+    )
+
+
 def _optional_feature_dimension(value: object, *, source: str) -> int | None:
     """Validate a serialized/model feature count without requiring it."""
     if value is None:
@@ -164,12 +195,37 @@ def predict_keystroke_counts(
         Per-word keystroke counts, e.g. [3, 7].
         Empty list if no keystrokes detected.
     """
+    return list(
+        predict_keystroke_counts_with_trace(
+            wav_path,
+            threshold=threshold,
+            delta=delta,
+            gap_threshold=gap_threshold,
+            merge_gap_seconds=merge_gap_seconds,
+        ).counts
+    )
+
+
+def predict_keystroke_counts_with_trace(
+    wav_path: str,
+    threshold: float = 0.5,
+    delta: float = 0.07,
+    gap_threshold: float = GAP_THRESHOLD_ML,
+    merge_gap_seconds: float = 0.06,
+    classifier_path: str | Path | None = None,
+) -> PredictionTrace:
+    """Run the served YAMNet path and return its segmentation evidence."""
     if gap_threshold is None:
         gap_threshold = GAP_THRESHOLD_ML
 
-    if not _DEFAULT_CLASSIFIER.exists():
+    selected_classifier = (
+        Path(classifier_path).resolve()
+        if classifier_path is not None
+        else _DEFAULT_CLASSIFIER
+    )
+    if not selected_classifier.exists():
         raise FileNotFoundError(
-            f"YAMNet classifier model not found: {_DEFAULT_CLASSIFIER}. "
+            f"YAMNet classifier model not found: {selected_classifier}. "
             "Run train_yamnet_classifier.py first or use method=rule."
         )
 
@@ -181,23 +237,26 @@ def predict_keystroke_counts(
     )
 
     if len(onsets) == 0:
-        return []
+        return _make_prediction_trace([], [], [])
 
     # ── Step 2: YAMNet false-positive filtering ───────────────────────────
     filtered = filter_onsets_with_yamnet(
         onsets,
         wav_path,
-        str(_DEFAULT_CLASSIFIER),
+        str(selected_classifier),
         confidence_threshold=threshold,
     )
     if len(filtered) == 0:
-        return []
+        return _make_prediction_trace([], [], [])
     onset_times = filtered
 
     # ── Step 3: Segment onsets into words ─────────────────────────────────
-    counts, _ = segment_into_words(onset_times, gap_threshold=gap_threshold)
+    counts, word_groups = segment_into_words(
+        onset_times,
+        gap_threshold=gap_threshold,
+    )
 
-    return counts
+    return _make_prediction_trace(counts, onset_times, word_groups)
 
 
 def predict_keystroke_counts_rule(
@@ -228,6 +287,23 @@ def predict_keystroke_counts_rule(
         Per-word keystroke counts, e.g. [3, 7].
         Empty list if no keystrokes detected.
     """
+    return list(
+        predict_keystroke_counts_rule_with_trace(
+            wav_path,
+            delta=delta,
+            gap_threshold=gap_threshold,
+            merge_gap_seconds=merge_gap_seconds,
+        ).counts
+    )
+
+
+def predict_keystroke_counts_rule_with_trace(
+    wav_path: str,
+    delta: float = 0.07,
+    gap_threshold: float = GAP_THRESHOLD_RULE,
+    merge_gap_seconds: float = 0.06,
+) -> PredictionTrace:
+    """Run the served DSP-only path and return its segmentation evidence."""
     if gap_threshold is None:
         gap_threshold = GAP_THRESHOLD_RULE
 
@@ -238,10 +314,13 @@ def predict_keystroke_counts_rule(
     )
 
     if len(onsets) == 0:
-        return []
+        return _make_prediction_trace([], [], [])
 
-    counts, _ = segment_into_words(onsets, gap_threshold=gap_threshold)
-    return counts
+    counts, word_groups = segment_into_words(
+        onsets,
+        gap_threshold=gap_threshold,
+    )
+    return _make_prediction_trace(counts, onsets, word_groups)
 
 
 def predict_keystroke_counts_ml(
@@ -274,23 +353,46 @@ def predict_keystroke_counts_ml(
         Per-word keystroke counts, e.g. [3, 7].
         Empty list if no keystrokes detected.
     """
+    return list(
+        predict_keystroke_counts_ml_with_trace(
+            wav_path,
+            delta=delta,
+            gap_threshold=gap_threshold,
+            merge_gap_seconds=merge_gap_seconds,
+        ).counts
+    )
+
+
+def predict_keystroke_counts_ml_with_trace(
+    wav_path: str,
+    delta: float = 0.07,
+    gap_threshold: float = GAP_THRESHOLD_ML,
+    merge_gap_seconds: float = 0.06,
+    count_model_path: str | Path | None = None,
+) -> PredictionTrace:
+    """Run the served count-regressor path and return its onset evidence."""
     if gap_threshold is None:
         gap_threshold = GAP_THRESHOLD_ML
 
-    if not _COUNT_PREDICTOR.exists():
+    selected_count_model = (
+        Path(count_model_path).resolve()
+        if count_model_path is not None
+        else _COUNT_PREDICTOR
+    )
+    if not selected_count_model.exists():
         raise FileNotFoundError(
-            f"Count predictor model not found: {_COUNT_PREDICTOR}. "
+            f"Count predictor model not found: {selected_count_model}. "
             f"Run train_model.py first."
         )
 
     # Load and validate the trusted local artifact once, then reuse it.
-    artifact = _load_count_predictor(str(_COUNT_PREDICTOR))
+    artifact = _load_count_predictor(str(selected_count_model))
     model = artifact.model
 
     # Step 1: Detect onsets
     onsets, _, _ = detect_onsets(wav_path, delta=delta, min_gap_seconds=merge_gap_seconds)
     if len(onsets) == 0:
-        return []
+        return _make_prediction_trace([], [], [])
 
     # Step 2: Segment into words
     _, word_groups = segment_into_words(onsets, gap_threshold=gap_threshold)
@@ -298,7 +400,11 @@ def predict_keystroke_counts_ml(
     # Step 3: Extract YAMNet features for all onsets at once
     candidates = extract_yamnet_candidates(wav_path, onsets)
     if not candidates:
-        return [1] * len(word_groups)
+        return _make_prediction_trace(
+            [1] * len(word_groups),
+            onsets,
+            word_groups,
+        )
 
     all_features = extract_features(candidates, wav_path)
     candidate_times = np.array([c.onset_time for c in candidates], dtype=float)
@@ -331,4 +437,4 @@ def predict_keystroke_counts_ml(
         raw_pred = float(model.predict(word_feat)[0])
         predicted_counts.append(max(1, round(raw_pred)))
 
-    return predicted_counts
+    return _make_prediction_trace(predicted_counts, onsets, word_groups)
