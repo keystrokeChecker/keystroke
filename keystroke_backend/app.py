@@ -1,41 +1,40 @@
-import os
-import tempfile
+from datetime import datetime
 from pathlib import Path
+from uuid import uuid4
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 
 from src.predictor import predict_keystroke_counts
-from src.yamnet_config import CLASSIFIER_THRESHOLD, SENSITIVITY_DELTA, GAP_THRESHOLD, MERGE_GAP_SECONDS
-from segmenter import format_output
+from src.yamnet_config import CLASSIFIER_THRESHOLD
 
 app = FastAPI(
     title="Keystroke Audio Analyzer",
-    description="Analyze WAV audio recorded from physical keyboard typing and return keystroke counts per word.",
+    description="Analyze WAV audio with rule-based onset detection and YAMNet filtering.",
     version="0.1",
 )
 
-VALID_METHODS = {"yamnet", "rule", "ml"}
-
+UPLOADS_DIR = Path(__file__).resolve().parent / "data" / "uploads"
 
 @app.get("/health")
 async def health():
     return {"status": "ok"}
 
 
-async def _save_upload_file_tmp(upload_file: UploadFile) -> str:
-    suffix = Path(upload_file.filename).suffix or ".wav"
-    if suffix.lower() not in {".wav", ".wave"}:
-        suffix = ".wav"
-
+async def _save_upload_file(upload_file: UploadFile) -> str:
+    UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
+    destination = UPLOADS_DIR / (
+        f"recording_{datetime.now().strftime('%Y%m%d_%H%M%S')}_"
+        f"{uuid4().hex[:8]}.wav"
+    )
     try:
-        tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
         contents = await upload_file.read()
         if not contents:
             raise ValueError("Uploaded file is empty")
-        tmp_file.write(contents)
-        tmp_file.flush()
-        tmp_file.close()
-        return tmp_file.name
+        destination.write_bytes(contents)
+        return str(destination)
+    except Exception:
+        destination.unlink(missing_ok=True)
+        raise
     finally:
         await upload_file.close()
 
@@ -45,34 +44,29 @@ async def analyze(
     file: UploadFile = File(...),
     method: str = Form("yamnet"),
     threshold: float = Form(CLASSIFIER_THRESHOLD),
-    delta: float = Form(SENSITIVITY_DELTA),
-    gap_threshold: float = Form(GAP_THRESHOLD),
-    merge_gap_seconds: float = Form(MERGE_GAP_SECONDS),
+    typing_speed: str = Form("auto"),
 ):
-    method = method.lower()
-    if method not in VALID_METHODS:
-        print(f"Validation Error: method {method} not in {VALID_METHODS}")
+    if method.lower() != "yamnet":
+        raise HTTPException(status_code=400, detail="method must be 'yamnet'")
+    if not 0.0 <= threshold <= 1.0:
+        raise HTTPException(status_code=400, detail="threshold must be between 0 and 1")
+    if typing_speed.lower() not in {"auto", "fast", "medium", "slow"}:
         raise HTTPException(
             status_code=400,
-            detail=f"method must be one of {sorted(VALID_METHODS)}",
+            detail="typing_speed must be auto, fast, medium, or slow",
         )
-    
-    # Map all legacy methods to yamnet
-    method = "yamnet"
 
     wav_path = None
     try:
-        wav_path = await _save_upload_file_tmp(file)
-        counts = predict_keystroke_counts(
+        wav_path = await _save_upload_file(file)
+        result = predict_keystroke_counts(
             wav_path,
             threshold=threshold,
-            delta=delta,
-            gap_threshold=gap_threshold,
-            merge_gap_seconds=merge_gap_seconds,
+            typing_speed=typing_speed.lower(),
         )
-        formatted = format_output(counts)
+        formatted = result["formatted"]
         print(f"\n---> KEYSTROKES DETECTED: {formatted} <---")
-        return {"counts": counts, "formatted": formatted}
+        return {**result, "saved_file": Path(wav_path).name}
     except FileNotFoundError as exc:
         print(f"FileNotFoundError: {exc}")
         raise HTTPException(status_code=400, detail=str(exc))
@@ -90,14 +84,9 @@ async def analyze(
             status_code=500,
             detail="Audio processing failed. Check the server logs for details.",
         )
-    # Removing the finally block to keep the file for debugging if it fails
-    # Success case will clean it up:
-    if wav_path and os.path.exists(wav_path):
-        os.remove(wav_path)
 
 
 if __name__ == "__main__":
     import uvicorn
 
     uvicorn.run("app:app", host="0.0.0.0", port=8000, reload=True)
-

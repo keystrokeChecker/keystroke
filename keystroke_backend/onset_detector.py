@@ -190,16 +190,17 @@ def detect_onsets(
     pre_max: int = 3,
     post_max: int = 3,
     backtrack: bool = True,
-    min_gap_seconds: float = 0.06,
-    prominence_multiplier: float = 0.5,
+    min_gap_seconds: float = 0.12,
+    prominence_multiplier: float = 0.65,
     smoothing_window: int = 7,
     # ── Precision / false-positive control ────────────────────────────────
     ambient_rms: float | None = None,
-    noise_gate_factor: float = 4.0,
+    noise_gate_factor: float = 4.5,
+    min_abs_energy_gate_rms: float = 0.012,
     snr_threshold: float = 4.0,
-    min_centroid_hz: float = 1000.0,
+    min_centroid_hz: float = 400.0,
     min_spectral_flatness: float = 0.08,
-    max_decay_ratio: float = 1.0,   # effectively disables this gate for now
+    max_decay_ratio: float = 6.0,
     debug: bool = True,
 ) -> tuple[np.ndarray, np.ndarray, int]:
     """
@@ -250,12 +251,18 @@ def detect_onsets(
     sr          : int        — sample rate
     """
 
-    # ── Load ──────────────────────────────────────────────────────────────────
+    # ── Load audio ────────────────────────────────────────────────────────
     y_raw, sr = librosa.load(wav_path, sr=16_000, mono=True)
     y_raw = y_raw.astype(np.float32)
 
-    raw_peak = float(np.max(np.abs(y_raw)))
-    if raw_peak < 0.001:
+    raw_peak = float(np.max(np.abs(y_raw))) if len(y_raw) > 0 else 0.0
+    raw_rms = float(np.sqrt(np.mean(y_raw ** 2))) if len(y_raw) > 0 else 0.0
+    if raw_peak < 0.016 and raw_rms < 0.0007:
+        if debug:
+            print(
+                f"[onset_debug] EARLY EXIT: raw_peak={raw_peak:.6f}, "
+                f"raw_rms={raw_rms:.6f} (quiet/silence)"
+            )
         return np.array([], dtype=float), y_raw, sr
 
     y = y_raw / raw_peak  # ± 1.0 scale
@@ -299,7 +306,7 @@ def detect_onsets(
         abs_noise_floor = max(inband_noise_rms, float(ambient_norm))
     abs_noise_floor = max(abs_noise_floor, 1e-9)
 
-    energy_gate_rms = noise_gate_factor * abs_noise_floor
+    energy_gate_rms = max(noise_gate_factor * abs_noise_floor, min_abs_energy_gate_rms)
     gate_mask = short_rms_unfiltered < energy_gate_rms
 
     transient_score = short_rms / long_rms
@@ -330,18 +337,18 @@ def detect_onsets(
     mad_ungated = np.median(np.abs(attack_score_ungated - noise_floor_ungated))
     dynamic_range_ungated = max(mad_ungated * 1.4826, np.std(attack_score_ungated) + 1e-6)
 
-    threshold = noise_floor_ungated + 0.7 * dynamic_range_ungated + 0.12 * max(0.0, delta)
-    threshold = max(threshold, mad_ungated * 1.4826 * 0.45)
-    threshold = max(threshold, 0.04 + 0.08 * max(0.0, delta))
+    threshold = noise_floor_ungated + 0.90 * dynamic_range_ungated + 0.12 * max(0.0, delta)
+    threshold = max(threshold, mad_ungated * 1.4826 * 0.60)
+    threshold = max(threshold, 0.045 + 0.08 * max(0.0, delta))
 
-    _min_gap = max(float(min_gap_seconds), 0.06)
+    _min_gap = max(float(min_gap_seconds), 0.05)
     min_distance = max(1, int(round(_min_gap * sr / hop_length)))
 
     peak_indices, _ = find_peaks(
         attack_score,
         height=threshold,
         distance=min_distance,
-        prominence=max(1e-6, threshold * 0.25),
+        prominence=max(1e-6, threshold * float(prominence_multiplier)),
     )
 
     if debug:
@@ -364,59 +371,87 @@ def detect_onsets(
     rejected_centroid = 0
     rejected_flatness = 0
     rejected_decay = 0
+    candidate_debug_log = []
+
+    if debug:
+        print(f"[onset_debug] PARAMETERS: min_centroid_hz={min_centroid_hz} "
+              f"min_spectral_flatness={min_spectral_flatness} "
+              f"max_decay_ratio={max_decay_ratio} min_gap_seconds={min_gap_seconds} "
+              f"noise_gate_factor={noise_gate_factor} delta={delta}")
+        print(f"[onset_debug] abs_noise_floor={abs_noise_floor:.6f} "
+              f"energy_gate_rms={energy_gate_rms:.6f} threshold={threshold:.6f} "
+              f"gated_frames={int(np.sum(gate_mask))}/{len(gate_mask)} "
+              f"candidates_after_peakfind={len(peak_indices)}")
 
     for frame_idx in onset_frames:
-        sample_idx = int(frame_idx * hop_length)
+        nominal_sample_idx = int(frame_idx * hop_length)
 
-        if min_centroid_hz > 0.0:
-            s0 = max(0, sample_idx - attack_half_samples)
-            s1 = min(len(filtered), sample_idx + attack_half_samples)
-            chunk = filtered[s0:s1]
-            if len(chunk) >= 4:
-                centroid = _spectral_centroid_hz(chunk, sr)
-                if centroid < min_centroid_hz:
-                    rejected_centroid += 1
-                    continue
+        # Align sample_idx to exact local maximum of filtered envelope within +/- 20ms window
+        win_s0 = max(0, nominal_sample_idx - int(0.020 * sr))
+        win_s1 = min(len(filtered), nominal_sample_idx + int(0.020 * sr))
+        env_chunk = np.abs(filtered[win_s0:win_s1])
+        if len(env_chunk) > 0:
+            sample_idx = win_s0 + int(np.argmax(env_chunk))
+        else:
+            sample_idx = nominal_sample_idx
 
-        if min_spectral_flatness > 0.0:
-            s0 = max(0, sample_idx - attack_half_samples)
-            s1 = min(len(filtered), sample_idx + attack_half_samples)
-            chunk = filtered[s0:s1]
-            if len(chunk) >= 4:
-                flatness = _spectral_flatness(chunk, sr)
-                if flatness < min_spectral_flatness:
-                    rejected_flatness += 1
-                    continue
+        # 1. Compute spectral centroid
+        s0 = max(0, sample_idx - attack_half_samples)
+        s1 = min(len(y), sample_idx + attack_half_samples)
+        chunk = y[s0:s1]
+        centroid_val = _spectral_centroid_hz(chunk, sr) if len(chunk) >= 4 else 0.0
 
-        if max_decay_ratio < 1.0:
-            a0 = sample_idx
-            a1 = min(len(filtered), sample_idx + attack_win_samples)
-            attack_chunk = filtered[a0:a1]
-            attack_rms = (
-                float(np.sqrt(np.mean(attack_chunk ** 2)))
-                if len(attack_chunk) > 0
-                else 0.0
-            )
+        # 2. Compute spectral flatness
+        flatness_val = _spectral_flatness(chunk, sr) if len(chunk) >= 4 else 0.0
 
-            d0 = min(len(filtered), sample_idx + decay_start_samples)
-            d1 = min(len(filtered), d0 + decay_win_samples)
-            decay_chunk = filtered[d0:d1]
-            decay_rms = (
-                float(np.sqrt(np.mean(decay_chunk ** 2)))
-                if len(decay_chunk) > 0
-                else 0.0
-            )
+        # 3. Compute decay ratio (post-attack RMS vs attack RMS)
+        a0 = sample_idx
+        a1 = min(len(filtered), sample_idx + attack_win_samples)
+        attack_chunk = filtered[a0:a1]
+        attack_rms = float(np.sqrt(np.mean(attack_chunk ** 2))) if len(attack_chunk) > 0 else 0.0
 
-            if attack_rms > 1e-9 and (decay_rms / attack_rms) > max_decay_ratio:
-                rejected_decay += 1
-                continue
+        d0 = min(len(filtered), sample_idx + decay_start_samples)
+        d1 = min(len(filtered), d0 + decay_win_samples)
+        decay_chunk = filtered[d0:d1]
+        decay_rms = float(np.sqrt(np.mean(decay_chunk ** 2))) if len(decay_chunk) > 0 else 0.0
 
-        kept_frames.append(int(frame_idx))
+        decay_ratio = (decay_rms / attack_rms) if attack_rms > 1e-9 else 0.0
+
+        # Evaluate gates in sequence
+        status = "KEPT"
+
+        if min_centroid_hz > 0.0 and centroid_val < min_centroid_hz:
+            rejected_centroid += 1
+            status = "REJECTED_CENTROID"
+        elif min_spectral_flatness > 0.0 and flatness_val < min_spectral_flatness:
+            rejected_flatness += 1
+            status = "REJECTED_FLATNESS"
+        elif max_decay_ratio > 0.0 and max_decay_ratio != 1.0 and decay_ratio > max_decay_ratio:
+            rejected_decay += 1
+            status = "REJECTED_DECAY"
+
+        candidate_debug_log.append({
+            "sample_idx": sample_idx,
+            "time_sec": sample_idx / sr,
+            "centroid": centroid_val,
+            "flatness": flatness_val,
+            "decay_ratio": decay_ratio,
+            "status": status,
+        })
+
+        if status == "KEPT":
+            kept_frames.append(int(frame_idx))
 
     if debug:
         print(f"[onset_debug] rejected: centroid={rejected_centroid} "
               f"flatness={rejected_flatness} decay={rejected_decay} "
               f"kept={len(kept_frames)}")
+        for entry in candidate_debug_log:
+            c_str = f"{entry['centroid']:.1f}" if entry["centroid"] is not None else "N/A"
+            f_str = f"{entry['flatness']:.4f}" if entry["flatness"] is not None else "N/A"
+            d_str = f"{entry['decay_ratio']:.4f}" if entry["decay_ratio"] is not None else "N/A"
+            print(f"[onset_debug]   candidate sample={entry['sample_idx']} (t={entry['time_sec']:.3f}s) "
+                  f"centroid={c_str}Hz flatness={f_str} decay_ratio={d_str} status={entry['status']}")
 
     if not kept_frames:
         return np.array([], dtype=float), y, sr

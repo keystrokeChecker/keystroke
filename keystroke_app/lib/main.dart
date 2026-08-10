@@ -115,7 +115,7 @@ class _KeystrokeHomePageState extends State<KeystrokeHomePage>
   bool _isUploading = false;
   String _statusMessage = 'Tap the red button to record';
   String _resultText = '';
-  String _selectedMethod = 'yamnet';
+  String _typingSpeed = 'auto';
   int _selectedTabIndex = 0;
 
   Duration _recordDuration = Duration.zero;
@@ -140,11 +140,18 @@ class _KeystrokeHomePageState extends State<KeystrokeHomePage>
     if (savedUrl != null && savedUrl.isNotEmpty) {
       _backendController.text = savedUrl;
     }
+    final savedSpeed = prefs.getString('typing_speed');
+    if (savedSpeed != null &&
+        const {'auto', 'fast', 'medium', 'slow'}.contains(savedSpeed) &&
+        mounted) {
+      setState(() => _typingSpeed = savedSpeed);
+    }
   }
 
   Future<void> _saveSettings() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('backend_url', _backendController.text.trim());
+    await prefs.setString('typing_speed', _typingSpeed);
   }
 
   @override
@@ -169,7 +176,8 @@ class _KeystrokeHomePageState extends State<KeystrokeHomePage>
     _recordDuration = Duration.zero;
     _recordTimer?.cancel();
     _recordTimer = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (mounted) setState(() => _recordDuration += const Duration(seconds: 1));
+      if (mounted)
+        setState(() => _recordDuration += const Duration(seconds: 1));
     });
   }
 
@@ -239,7 +247,10 @@ class _KeystrokeHomePageState extends State<KeystrokeHomePage>
         return;
       }
       if (await file.length() == 0) {
-        setState(() => _statusMessage = 'Recorded file is empty (0 bytes). Check permissions.');
+        setState(
+          () => _statusMessage =
+              'Recorded file is empty (0 bytes). Check permissions.',
+        );
         return;
       }
       setState(() {
@@ -274,34 +285,53 @@ class _KeystrokeHomePageState extends State<KeystrokeHomePage>
       return;
     }
     final analyzeUri = uri.replace(
-      path: uri.path.endsWith('/') ? '${uri.path}analyze' : '${uri.path}/analyze',
+      path: uri.path.endsWith('/')
+          ? '${uri.path}analyze'
+          : '${uri.path}/analyze',
     );
     try {
       final request = http.MultipartRequest('POST', analyzeUri);
-      request.fields['method'] = _selectedMethod;
+      request.fields['method'] = 'yamnet';
+      request.fields['typing_speed'] = _typingSpeed;
       request.files.add(
-        await http.MultipartFile.fromPath('file', file.path, filename: 'recording.wav'),
+        await http.MultipartFile.fromPath(
+          'file',
+          file.path,
+          filename: 'recording.wav',
+        ),
       );
       final streamedResponse = await request.send();
       final response = await http.Response.fromStream(streamedResponse);
       if (response.statusCode != 200) {
-        setState(() => _statusMessage = 'Backend error ${response.statusCode}: ${response.body}');
+        setState(
+          () => _statusMessage =
+              'Backend error ${response.statusCode}: ${response.body}',
+        );
         return;
       }
       final Map<String, dynamic> body = jsonDecode(response.body);
-      final List<int> counts = (body['counts'] as List).map((e) => e as int).toList();
-      final String formatted = (body['formatted'] as String?)?.trim() ?? '';
+      final List<int> counts =
+          (body['counts'] as List?)
+              ?.map((value) => (value as num).toInt())
+              .toList() ??
+          <int>[0];
+      final total =
+          (body['count'] as num?)?.toInt() ??
+          counts.fold<int>(0, (sum, value) => sum + value);
+      final String formatted =
+          (body['formatted'] as String?)?.trim().isNotEmpty == true
+          ? (body['formatted'] as String).trim()
+          : counts.join('|');
       final displayResult = formatted.isNotEmpty ? formatted : '0';
       final result = RecordingResult(
         timestamp: DateTime.now(),
         formatted: displayResult,
         counts: counts,
-        method: _selectedMethod,
         filePath: file.path,
       );
       setState(() {
         _resultText = displayResult;
-        _statusMessage = counts.isEmpty || (counts.length == 1 && counts.first == 0)
+        _statusMessage = total == 0
             ? 'Analysis complete — no keystrokes detected'
             : 'Analysis complete';
         _history.insert(0, result);
@@ -344,9 +374,9 @@ class _KeystrokeHomePageState extends State<KeystrokeHomePage>
               const SizedBox(height: 20),
               Text(
                 'Settings',
-                style: Theme.of(ctx).textTheme.titleLarge?.copyWith(
-                      fontWeight: FontWeight.w600,
-                    ),
+                style: Theme.of(
+                  ctx,
+                ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w600),
               ),
               const SizedBox(height: 16),
               TextField(
@@ -360,16 +390,22 @@ class _KeystrokeHomePageState extends State<KeystrokeHomePage>
               ),
               const SizedBox(height: 12),
               DropdownButtonFormField<String>(
-                initialValue: _selectedMethod,
+                initialValue: _typingSpeed,
                 decoration: const InputDecoration(
-                  labelText: 'Prediction method',
+                  labelText: 'Typing speed',
+                  helperText: 'Used only to place | between words',
                   border: OutlineInputBorder(),
                 ),
                 items: const [
-                  DropdownMenuItem(value: 'yamnet', child: Text('YAMNet (ML-based)')),
+                  DropdownMenuItem(value: 'auto', child: Text('Auto')),
+                  DropdownMenuItem(value: 'fast', child: Text('Fast')),
+                  DropdownMenuItem(value: 'medium', child: Text('Medium')),
+                  DropdownMenuItem(value: 'slow', child: Text('Slow')),
                 ],
                 onChanged: (value) {
-                  if (value != null) setState(() => _selectedMethod = value);
+                  if (value == null) return;
+                  setState(() => _typingSpeed = value);
+                  _saveSettings();
                 },
               ),
               const SizedBox(height: 12),
@@ -436,7 +472,8 @@ class _KeystrokeHomePageState extends State<KeystrokeHomePage>
     final time =
         '${local.hour.toString().padLeft(2, '0')}:${local.minute.toString().padLeft(2, '0')}';
     if (itemDay == today) return 'Today  $time';
-    if (itemDay == today.subtract(const Duration(days: 1))) return 'Yesterday  $time';
+    if (itemDay == today.subtract(const Duration(days: 1)))
+      return 'Yesterday  $time';
     return '${local.month}/${local.day}/${local.year}  $time';
   }
 
@@ -496,7 +533,9 @@ class _KeystrokeHomePageState extends State<KeystrokeHomePage>
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     Expanded(
-                      child: _isRecording ? _buildRecordingView() : _buildRecordTab(context),
+                      child: _isRecording
+                          ? _buildRecordingView()
+                          : _buildRecordTab(context),
                     ),
                     _buildBottomControls(),
                   ],
@@ -554,7 +593,9 @@ class _KeystrokeHomePageState extends State<KeystrokeHomePage>
           _statusMessage,
           style: TextStyle(
             fontSize: 14,
-            color: Theme.of(context).textTheme.bodyMedium?.color?.withValues(alpha: 0.6),
+            color: Theme.of(
+              context,
+            ).textTheme.bodyMedium?.color?.withValues(alpha: 0.6),
           ),
         ),
       ],
@@ -571,10 +612,7 @@ class _KeystrokeHomePageState extends State<KeystrokeHomePage>
         if (_resultText.isNotEmpty || _isUploading) ...[
           Padding(
             padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
-            child: _ResultCard(
-              result: _resultText,
-              isLoading: _isUploading,
-            ),
+            child: _ResultCard(result: _resultText, isLoading: _isUploading),
           ),
         ],
         if (_resultText.isEmpty && !_isUploading)
@@ -585,7 +623,9 @@ class _KeystrokeHomePageState extends State<KeystrokeHomePage>
               textAlign: TextAlign.center,
               style: TextStyle(
                 fontSize: 15,
-                color: Theme.of(context).textTheme.bodyMedium?.color?.withValues(alpha: 0.5),
+                color: Theme.of(
+                  context,
+                ).textTheme.bodyMedium?.color?.withValues(alpha: 0.5),
               ),
             ),
           ),
@@ -620,14 +660,18 @@ class _KeystrokeHomePageState extends State<KeystrokeHomePage>
                       Icon(
                         Icons.graphic_eq_rounded,
                         size: 48,
-                        color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.3),
+                        color: Theme.of(
+                          context,
+                        ).colorScheme.primary.withValues(alpha: 0.3),
                       ),
                       const SizedBox(height: 12),
                       Text(
                         'No recordings yet',
                         style: TextStyle(
                           fontSize: 16,
-                          color: Theme.of(context).textTheme.bodyMedium?.color?.withValues(alpha: 0.4),
+                          color: Theme.of(
+                            context,
+                          ).textTheme.bodyMedium?.color?.withValues(alpha: 0.4),
                         ),
                       ),
                       const SizedBox(height: 4),
@@ -635,7 +679,9 @@ class _KeystrokeHomePageState extends State<KeystrokeHomePage>
                         'Tap the red button below to start',
                         style: TextStyle(
                           fontSize: 13,
-                          color: Theme.of(context).textTheme.bodyMedium?.color?.withValues(alpha: 0.3),
+                          color: Theme.of(
+                            context,
+                          ).textTheme.bodyMedium?.color?.withValues(alpha: 0.3),
                         ),
                       ),
                     ],
@@ -648,7 +694,8 @@ class _KeystrokeHomePageState extends State<KeystrokeHomePage>
                     final item = recentHistory[index];
                     return _RecordingListTile(
                       title: item.formatted.isNotEmpty ? item.formatted : '0',
-                      subtitle: '${item.counts.fold<int>(0, (a, b) => a + b)} keystrokes · ${item.method.toUpperCase()}',
+                      subtitle:
+                          '${item.counts.fold<int>(0, (a, b) => a + b)} keystrokes',
                       timestamp: _formatTimestamp(item.timestamp),
                       onPlay: () => _playAudio(item.filePath),
                     );
@@ -676,7 +723,9 @@ class _KeystrokeHomePageState extends State<KeystrokeHomePage>
               'Tap to record',
               style: TextStyle(
                 fontSize: 13,
-                color: Theme.of(context).textTheme.bodyMedium?.color?.withValues(alpha: 0.4),
+                color: Theme.of(
+                  context,
+                ).textTheme.bodyMedium?.color?.withValues(alpha: 0.4),
               ),
             ),
           ],
@@ -795,9 +844,7 @@ class _ResultCard extends StatelessWidget {
       decoration: BoxDecoration(
         color: Theme.of(context).cardTheme.color,
         borderRadius: BorderRadius.circular(20),
-        border: Border.all(
-          color: _samsungBlue.withValues(alpha: 0.15),
-        ),
+        border: Border.all(color: _samsungBlue.withValues(alpha: 0.15)),
       ),
       child: Column(
         children: [
@@ -815,7 +862,10 @@ class _ResultCard extends StatelessWidget {
             const SizedBox(
               height: 36,
               width: 36,
-              child: CircularProgressIndicator(strokeWidth: 2.5, color: _samsungBlue),
+              child: CircularProgressIndicator(
+                strokeWidth: 2.5,
+                color: _samsungBlue,
+              ),
             )
           else
             Text(
@@ -912,7 +962,11 @@ class _RecordingListTile extends StatelessWidget {
                 color: _samsungBlue.withValues(alpha: 0.12),
                 shape: BoxShape.circle,
               ),
-              child: const Icon(Icons.play_arrow_rounded, color: _samsungBlue, size: 24),
+              child: const Icon(
+                Icons.play_arrow_rounded,
+                color: _samsungBlue,
+                size: 24,
+              ),
             ),
             onPressed: onPlay,
           ),

@@ -18,27 +18,18 @@ venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-## YAMNet Pipeline
+## Phase 1 production path
 
-The backend now uses YAMNet embeddings plus a lightweight classifier for keystroke onset detection.
+The API uses `onset_detector.py` for candidate clicks, then classifies each
+candidate with a lightweight scikit-learn Random Forest over MFCC features.
+The classes are `letter`, `space`, and `noise`. YAMNet files are retained for
+offline experiments but are not imported or called by the server.
 
-Train and test in one command:
-
-```bash
-python -m src.run_yamnet_pipeline
-```
-
-You can also target specific sessions:
+Train the classifier after changing labeled recordings:
 
 ```bash
-python -m src.run_yamnet_pipeline --names session1 session2 session3
+python train_keystroke_type_classifier.py
 ```
-
-That creates:
-
-- `data/yamnet_dataset/X.npy`
-- `data/yamnet_dataset/y.npy`
-- `models/yamnet_keystroke_classifier.joblib`
 
 ## Run the server
 
@@ -69,21 +60,18 @@ Returns a basic connectivity response:
 Upload a WAV file using multipart form data:
 
 - `file`: the WAV audio file
-- `method`: `yamnet` only
-- `threshold`: word-gap threshold in seconds
-- `delta`: detector sensitivity adjustment
 
 Response:
 
 ```json
 {
-  "counts": [3, 7],
-  "formatted": "3|7"
+  "count": 10,
+  "counts": [5, 5],
+  "formatted": "5|5"
 }
 ```
 
 ## Notes
 
-- The backend now uses YAMNet end-to-end.
-- The YAMNet model is loaded from TensorFlow Hub, so the first run needs TensorFlow and TensorFlow Hub installed.
+- The backend returns one total count; it does not attempt pause-based word splitting.
 - Your phone must be on the same local network as your development machine.

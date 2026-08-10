@@ -50,26 +50,40 @@ class RecordingsPage extends StatelessWidget {
             ),
             alignment: Alignment.centerRight,
             padding: const EdgeInsets.only(right: 24),
-            child: const Icon(Icons.delete_outline, color: Colors.white, size: 28),
+            child: const Icon(
+              Icons.delete_outline,
+              color: Colors.white,
+              size: 28,
+            ),
           ),
           onDismissed: (_) => onDelete(index),
           child: Card(
             margin: const EdgeInsets.only(bottom: 10),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16),
+            ),
             child: ListTile(
-              contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              contentPadding: const EdgeInsets.symmetric(
+                horizontal: 16,
+                vertical: 8,
+              ),
               leading: Container(
                 width: 44,
                 height: 44,
                 decoration: BoxDecoration(
-                  color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.12),
+                  color: Theme.of(
+                    context,
+                  ).colorScheme.primary.withValues(alpha: 0.12),
                   shape: BoxShape.circle,
                 ),
-                child: const Icon(Icons.graphic_eq_rounded, color: Color(0xFF0188E2)),
+                child: const Icon(
+                  Icons.graphic_eq_rounded,
+                  color: Color(0xFF0188E2),
+                ),
               ),
               title: Text(item.formatted),
               subtitle: Text(
-                '$fileName | ${item.method.toUpperCase()}',
+                '$fileName | ${item.counts.fold<int>(0, (a, b) => a + b)} keystrokes',
                 style: TextStyle(
                   color: isDark ? Colors.white60 : Colors.black54,
                 ),

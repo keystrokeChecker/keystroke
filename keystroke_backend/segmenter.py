@@ -36,12 +36,33 @@ def auto_threshold(onset_times, min_threshold=0.15, max_threshold=2.0):
     return float(np.clip(threshold, min_threshold, max_threshold))
 
 
-def segment_into_words(onset_times, gap_threshold=0.4):
+SPEED_GAP_THRESHOLDS = {
+    "fast": 0.50,
+    "medium": 0.65,
+    "slow": 0.85,
+}
+
+
+def infer_typing_speed(onset_times):
+    """Choose a forgiving boundary profile from typical key-to-key spacing."""
+    if len(onset_times) < 3:
+        return "medium"
+    gaps = np.diff(onset_times)
+    typical_gap = float(np.median(gaps))
+    if typical_gap <= 0.22:
+        return "fast"
+    if typical_gap <= 0.40:
+        return "medium"
+    return "slow"
+
+
+def segment_into_words(onset_times, gap_threshold=None, typing_speed="auto"):
     """
     Group onset timestamps into words by splitting on gaps > gap_threshold.
 
-    gap_threshold : seconds between consecutive onsets that signals a word boundary.
-                    Default 0.4 s — tune with tune_and_evaluate.py.
+    gap_threshold : optional explicit word-boundary gap in seconds.
+    typing_speed  : ``fast``, ``medium``, ``slow``, or ``auto``. Auto selects
+                    a forgiving threshold from the recording's typical gap.
 
     Returns
     -------
@@ -50,6 +71,12 @@ def segment_into_words(onset_times, gap_threshold=0.4):
     """
     if len(onset_times) == 0:
         return [], []
+
+    if gap_threshold is None:
+        speed = infer_typing_speed(onset_times) if typing_speed == "auto" else typing_speed
+        if speed not in SPEED_GAP_THRESHOLDS:
+            raise ValueError("typing_speed must be fast, medium, slow, or auto")
+        gap_threshold = SPEED_GAP_THRESHOLDS[speed]
 
     word_counts = []
     word_groups = []

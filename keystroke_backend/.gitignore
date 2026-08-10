@@ -1,4 +1,5 @@
 venv/
+.venv/
 __pycache__/
 *.pyc
 *.pyo
@@ -6,4 +7,5 @@ data/*.wav
 data/uploads/
 models/*.pkl
 models/*.joblib
+!models/keystroke_type_classifier.pkl
 .pytest_cache/

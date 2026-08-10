@@ -1,25 +1,22 @@
 # Keystroke Analyzer
 
-A cross-platform system that listens to the sound of your physical keyboard and counts keystrokes per word — in real time. It pairs a **Flutter mobile app** with a **FastAPI Python backend** to record, analyze, and report keystroke counts from WAV audio.
+A cross-platform system that listens to the sound of your physical keyboard and counts total keystrokes. It pairs a **Flutter mobile app** with a **FastAPI Python backend** to record, analyze, and report one count from WAV audio.
 
 ---
 
 ## How It Works
 
-The system follows a six-stage audio ML pipeline:
+The Phase 1 production path is intentionally small:
 
 ```
-Record → Detect → Segment → Evaluate → Train → Predict
+Record → Rule-based detect → MFCC classify → Return total and word counts
 ```
 
 1. **Record** — Capture keyboard audio and synchronize it with a ground-truth keylog
 2. **Detect** — Find keystroke click timestamps using bandpass filtering and adaptive onset detection
-3. **Segment** — Group detected clicks into words by looking for inter-word pause gaps
-4. **Evaluate** — Compare predictions against the ground truth and tune parameters
-5. **Train** — Build a RandomForest ML model on MFCC audio features
-6. **Predict** — Serve predictions via REST API (rule-based or ML-based)
+3. **Return total** — Avoid unreliable pause-based word splitting in Phase 1
 
-The Flutter app records audio through the phone microphone, sends it to the backend over your local Wi-Fi network, and displays the result as a pipe-delimited count (e.g., `3|7` for the phrase "the project").
+The Flutter app records audio through the phone microphone, sends it to the backend over your local Wi-Fi network, and displays one total count (for example, `10`).
 
 ---
 
@@ -124,31 +121,25 @@ Health check endpoint.
 
 ### `POST /analyze`
 
-Accepts a WAV audio recording and returns keystroke counts per word.
+Accepts a WAV audio recording and returns one total keystroke count.
 
 **Form fields:**
 
 | Field       | Type   | Default | Description                                               |
 |-------------|--------|---------|-----------------------------------------------------------|
 | `file`      | file   | —       | WAV audio file (required)                                 |
-| `method`    | string | `rule`  | Prediction method: `rule` or `ml`                         |
-| `threshold` | float  | `0.4`   | Word boundary gap in seconds (higher = fewer word splits) |
-| `delta`     | float  | `0.07`  | Onset sensitivity (lower = more keystrokes detected)      |
 
 **Example request:**
 ```bash
-curl -X POST http://127.0.0.1:8000/analyze \
-  -F "file=@data/session1.wav" \
-  -F "method=rule" \
-  -F "threshold=0.4" \
-  -F "delta=0.07"
+curl -X POST http://127.0.0.1:8000/analyze -F "file=@data/session1.wav"
 ```
 
 **Response:**
 ```json
 {
-  "counts": [3, 7],
-  "formatted": "3|7"
+  "count": 10,
+  "counts": [10],
+  "formatted": "10"
 }
 ```
 
@@ -231,7 +222,7 @@ python predict.py data/new_recording.wav --method ml
 - **Audio playback** — Replay any previous recording from the history list
 - **Swipe to delete** — Remove individual history entries (audio file is also deleted)
 - **Persistent state** — History survives app restarts via `SharedPreferences`
-- **Settings panel** — Configure backend URL and prediction method (rule or ML)
+- **Settings panel** — Configure the backend URL
 
 ---
 
