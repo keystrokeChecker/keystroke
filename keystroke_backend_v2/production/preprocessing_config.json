@@ -1,0 +1,5 @@
+{
+  "normalization": "P2",
+  "highpass_cutoff_hz": 80.0,
+  "preemphasis_coeff": 0.97
+}

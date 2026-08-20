@@ -1,0 +1,21 @@
+{
+  "model_name": "ExtraTrees",
+  "feature_set": "D",
+  "normalization": "P2",
+  "training_samples": 5627,
+  "test_samples": 1759,
+  "validation_metrics": {
+    "accuracy": 0.9090392268334281,
+    "macro_f1": 0.914504653043641,
+    "balanced_accuracy": 0.9132766691010633,
+    "top3_accuracy": 0.9710062535531552,
+    "log_loss": 0.37214049997786547
+  },
+  "calibration_metrics": {
+    "log_loss": 0.37214049997786547,
+    "brier_score": 0.14027715769786733,
+    "ece": 0.09216680302243768
+  },
+  "classes_count": 27,
+  "strictly_public_data_only": true
+}

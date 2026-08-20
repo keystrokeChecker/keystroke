@@ -1,0 +1,20 @@
+# Flutter build artifacts
+keystroke_app/build/
+keystroke_app/.dart_tool/
+*.apk
+
+# Python virtual environment & cache
+.venv/
+*/.venv/
+__pycache__/
+*/__pycache__/
+*.pyc
+
+# Large dataset archives & audio data
+keystroke_colab_package.zip
+keystroke_backend_v2/data/
+*.zip
+*.joblib
+
+# Scripts / temp files
+run_backend.bat

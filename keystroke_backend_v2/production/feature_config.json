@@ -1,0 +1,7 @@
+{
+  "feature_set": "D",
+  "n_mfcc": 20,
+  "include_deltas": true,
+  "include_spectral": true,
+  "include_temporal": true
+}

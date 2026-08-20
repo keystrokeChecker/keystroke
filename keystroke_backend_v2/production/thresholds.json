@@ -1,0 +1,5 @@
+{
+  "confident_threshold": 0.6,
+  "low_confidence_threshold": 0.35,
+  "unknown_threshold": 0.2
+}

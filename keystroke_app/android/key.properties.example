@@ -1,0 +1,6 @@
+# Copy this file to key.properties and replace every value.
+# key.properties and keystore files are intentionally ignored by Git.
+storeFile=C:\\absolute\\path\\to\\keystroke-release.jks
+storePassword=replace-with-a-private-password
+keyAlias=keystroke
+keyPassword=replace-with-a-private-password
